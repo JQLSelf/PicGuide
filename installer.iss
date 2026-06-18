@@ -12,7 +12,7 @@ AppSupportURL=https://example.com
 DefaultDirName={autopf}\PixelVault
 DefaultGroupName=PixelVault
 AllowNoIcons=yes
-OutputDir=E:\\flutter\\pixelvault\\dist
+OutputDir=E:\\flutter\\PicGuide\\dist
 OutputBaseFilename=PixelVault-1.0.1-win-x64-Setup
 Compression=lzma2
 SolidCompression=yes
@@ -20,7 +20,7 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\pixelvault.exe
 
 [Files]
-Source: "E:\\flutter\\pixelvault\\build\\windows\\x64\\runner\\Release\*"; \
+Source: "E:\\flutter\\PicGuide\\build\\windows\\x64\\runner\\Release\*"; \
     DestDir: "{app}"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 

@@ -455,6 +455,10 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   List<Widget> _buildNormalActions() {
     final vm = ref.watch(viewModeProvider);
     final sort = ref.watch(browserSortProvider);
+    final scanController = ref.watch(scanControllerProvider);
+    final isScanning = scanController != null &&
+        (scanController.state == ScanState.scanning ||
+            scanController.state == ScanState.paused);
     return [
       _ViewModeToggle(
         current: vm,
@@ -469,31 +473,36 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       _CapsuleIconAction(
         icon: Icons.create_new_folder_outlined,
         tooltip: '导入文件夹',
-        onTap: _pickFolder,
+        onTap: isScanning ? null : _pickFolder,
+        enabled: !isScanning,
       ),
       const SizedBox(width: 4),
       _CapsuleIconAction(
         icon: Icons.add_photo_alternate_outlined,
         tooltip: '导入单文件',
-        onTap: _pickSingleFile,
+        onTap: isScanning ? null : _pickSingleFile,
+        enabled: !isScanning,
       ),
       const SizedBox(width: 4),
       _CapsuleIconAction(
         icon: Icons.fact_check_outlined,
         tooltip: '全库对账（查找缺失文件）',
-        onTap: _reconcileAll,
+        onTap: isScanning ? null : _reconcileAll,
+        enabled: !isScanning,
       ),
       const SizedBox(width: 4),
       _CapsuleIconAction(
         icon: Icons.location_on_outlined,
         tooltip: '全库重新分析区域（GPS → 省/市）',
-        onTap: _reAnalyzeRegions,
+        onTap: isScanning ? null : _reAnalyzeRegions,
+        enabled: !isScanning,
       ),
       const SizedBox(width: 4),
       _CapsuleIconAction(
         icon: Icons.image_outlined,
         tooltip: '全库缩略图扫描（重新生成缺失缩略图）',
-        onTap: _regenerateAllThumbnails,
+        onTap: isScanning ? null : _regenerateAllThumbnails,
+        enabled: !isScanning,
       ),
     ];
   }
@@ -857,6 +866,7 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
         ref.read(scanStateProvider.notifier).state = null;
         ref.read(scanControllerProvider.notifier).state = null;
       }
+      controller.dispose();
     }
     if (mounted) ref.read(browserRefreshSignalProvider.notifier).state++;
   }
@@ -1689,34 +1699,42 @@ class _TagChips extends ConsumerWidget {
 class _CapsuleIconAction extends StatelessWidget {
   final IconData icon;
   final String tooltip;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final Color? color;
+  final bool enabled;
   const _CapsuleIconAction({
     required this.icon,
     required this.tooltip,
     required this.onTap,
     this.color,
+    this.enabled = true,
   });
 
   @override
   Widget build(BuildContext context) {
     final c = color;
+    final isEnabled = enabled && onTap != null;
     return Tooltip(
-      message: tooltip,
+      message: isEnabled ? tooltip : '$tooltip（扫描中不可用）',
       child: InkWell(
-        onTap: onTap,
+        onTap: isEnabled ? onTap : null,
         borderRadius: BorderRadius.circular(14),
         child: Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: c != null
-                ? c.withOpacity(0.1)
-                : Theme.of(context).colorScheme.primary.withOpacity(0.08),
+            color: isEnabled
+                ? (c != null
+                    ? c.withOpacity(0.1)
+                    : Theme.of(context).colorScheme.primary.withOpacity(0.08))
+                : Theme.of(context).disabledColor.withOpacity(0.1),
             borderRadius: BorderRadius.circular(14),
           ),
           child: Icon(icon,
-              size: 18, color: c ?? Theme.of(context).colorScheme.primary),
+              size: 18,
+              color: isEnabled
+                  ? (c ?? Theme.of(context).colorScheme.primary)
+                  : Theme.of(context).disabledColor),
         ),
       ),
     );

@@ -3,18 +3,27 @@
 // 整体风格：胶囊 + 玻璃 + 圆角 + 柔和阴影
 // 支持白天/黑夜模式自适应
 // ============================================================
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:window_manager/window_manager.dart';
 import 'src/providers/provider_app.dart';
 import 'src/ui/browser/page_browser.dart';
 import 'src/ui/dashboard/page_dashboard.dart';
 import 'src/db/database.dart';
 import 'src/providers/provider_database.dart';
 import 'src/services/service_manual.dart';
+import 'src/services/service_scan_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 桌面端窗口管理初始化（仅用于拦截关闭事件）
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await windowManager.ensureInitialized();
+    await windowManager.setPreventClose(true);
+  }
 
   // ImageCache 配置：扩大 LRU 上限，减少 GC 抖动
   // 默认是 100 项 / 100 MB，对 4 列 GridView + 大量图片的浏览器来说太紧张
@@ -264,9 +273,13 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> {
+class _AppShellState extends ConsumerState<AppShell> with WindowListener, SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
   int _lastRefreshSignal = 0;
+  bool _isExiting = false;
+  late AnimationController _exitAnimationController;
+  late Animation<double> _exitOpacity;
+  late Animation<double> _exitScale;
 
   static const List<({IconData icon, IconData selectedIcon, String label})>
       _navItems = [
@@ -283,6 +296,101 @@ class _AppShellState extends ConsumerState<AppShell> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.addListener(this);
+    }
+    _exitAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _exitOpacity = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(parent: _exitAnimationController, curve: Curves.easeInOut),
+    );
+    _exitScale = Tween<double>(begin: 1.0, end: 0.95).animate(
+      CurvedAnimation(parent: _exitAnimationController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.removeListener(this);
+    }
+    _exitAnimationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void onWindowClose() async {
+    if (_isExiting) return;
+
+    final scanController = ref.read(scanControllerProvider);
+    final isScanning = scanController != null &&
+        (scanController.state == ScanState.scanning ||
+            scanController.state == ScanState.paused ||
+            scanController.state == ScanState.stopping);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出应用'),
+        content: Text(isScanning
+            ? '正在扫描中，是否确认退出？\n退出后扫描任务将自动停止。'
+            : '确定要退出应用吗？'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton.tonal(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('退出', style: TextStyle(color: Colors.red.shade400))),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      _isExiting = true;
+
+      if (isScanning && scanController != null) {
+        scanController.confirmStop();
+        await for (final state in scanController.stateStream) {
+          if (state == ScanState.stopped) {
+            break;
+          }
+        }
+      }
+
+      await Future.wait([
+        _cleanupResources(scanController),
+        _playExitAnimation(),
+      ]);
+
+      await windowManager.destroy();
+    }
+  }
+
+  Future<void> _cleanupResources(ScanController? scanController) async {
+    try {
+      scanController?.dispose();
+
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+
+      final db = ref.read(databaseProvider);
+      await db.close();
+    } catch (e) {
+      debugPrint('资源清理失败: $e');
+    }
+  }
+
+  Future<void> _playExitAnimation() async {
+    await _exitAnimationController.forward();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -297,34 +405,76 @@ class _AppShellState extends ConsumerState<AppShell> {
       });
     }
 
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: isDark
-                ? [const Color(0xFF12131A), const Color(0xFF1E1F2D)]
-                : [const Color(0xFFF6F7FB), const Color(0xFFEEF1F8)],
-          ),
-        ),
-        child: Row(
+    return AnimatedBuilder(
+      animation: _exitAnimationController,
+      builder: (context, child) {
+        return Stack(
           children: [
-            _CapsuleNavRail(
-              selectedIndex: _selectedIndex,
-              items: _navItems,
-              onSelect: (i) => setState(() => _selectedIndex = i),
-            ),
-            Expanded(
-              child: IndexedStack(
-                index: _selectedIndex,
-                children: const [
-                  BrowserPage(),
-                  DashboardPage(),
-                ],
+            Opacity(
+              opacity: _exitOpacity.value,
+              child: Transform.scale(
+                scale: _exitScale.value,
+                child: child,
               ),
             ),
+            if (_isExiting)
+              FadeTransition(
+                opacity: CurvedAnimation(
+                  parent: _exitAnimationController,
+                  curve: const Interval(0.2, 1.0),
+                ),
+                child: Container(
+                  color: isDark ? Colors.black : Colors.white,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text(
+                          '正在关闭应用...',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
           ],
+        );
+      },
+      child: Scaffold(
+        body: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [const Color(0xFF12131A), const Color(0xFF1E1F2D)]
+                  : [const Color(0xFFF6F7FB), const Color(0xFFEEF1F8)],
+            ),
+          ),
+          child: Row(
+            children: [
+              _CapsuleNavRail(
+                selectedIndex: _selectedIndex,
+                items: _navItems,
+                onSelect: (i) => setState(() => _selectedIndex = i),
+              ),
+              Expanded(
+                child: IndexedStack(
+                  index: _selectedIndex,
+                  children: const [
+                    BrowserPage(),
+                    DashboardPage(),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

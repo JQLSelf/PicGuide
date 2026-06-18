@@ -66,11 +66,10 @@ class ScanController {
     }
   }
 
-  /// 确认停止扫描
+  /// 确认停止扫描（支持强制停止：scanning/paused/stopping 状态均可调用）
   void confirmStop() {
-    if (_state == ScanState.stopping) {
+    if (_state == ScanState.scanning || _state == ScanState.paused || _state == ScanState.stopping) {
       _shouldStop = true;
-      // 如果当前处于暂停状态，先释放暂停锁，让扫描循环能响应停止信号
       _pauseCompleter?.complete();
       _pauseCompleter = null;
       _updateState(ScanState.stopped);
