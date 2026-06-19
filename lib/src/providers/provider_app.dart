@@ -127,3 +127,9 @@ final timelineLinkProvider =
 final timelineBucketsProvider = FutureProvider<List<MonthlyBucket>>((ref) {
   return ref.read(databaseProvider).getMonthlyDateBuckets();
 });
+
+/// EXIF 城市筛选条件（由地图页设置，浏览器页监听）
+final exifCityFilterProvider = StateProvider<String?>((ref) => null);
+
+/// 当前页面索引（0=浏览器，1=仪表盘）
+final currentPageProvider = StateProvider<int>((ref) => 0);

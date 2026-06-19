@@ -10,6 +10,7 @@ import '../../db/database.dart';
 import '../../providers/provider_database.dart';
 import '../../providers/provider_app.dart';
 import '../widgets/dialog_manual_viewer.dart';
+import 'widget_photo_map.dart';
 
 // ── Providers ──
 
@@ -116,30 +117,38 @@ class DashboardPage extends ConsumerWidget {
             ),
             const SizedBox(height: 24),
 
-            // 图表区（三列布局）
+            // 图表区：左侧（词云 + 文件大小） / 右侧（城市分布 + 地图）
             LayoutBuilder(builder: (ctx, constraints) {
               final wide = constraints.maxWidth > 900;
               if (wide) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: _FileSizePieCard()),
+                    // 左侧：标签词云在上，文件大小在下
+                    Expanded(
+                      child: Column(
+                        children: [
+                          _TagCloudCard(),
+                          const SizedBox(height: 16),
+                          _FileSizePieCard(),
+                        ],
+                      ),
+                    ),
                     const SizedBox(width: 16),
+                    // 右侧：城市分布 + 地图（flex: 2 占更多空间）
                     Expanded(flex: 2, child: _CityBarCard()),
                   ],
                 );
               } else {
                 return Column(children: [
+                  _TagCloudCard(),
+                  const SizedBox(height: 16),
                   _FileSizePieCard(),
                   const SizedBox(height: 16),
                   _CityBarCard(),
                 ]);
               }
             }),
-            const SizedBox(height: 24),
-
-            // 标签词云
-            _TagCloudCard(),
           ],
         ),
       ),
@@ -405,25 +414,29 @@ class _PieChartState extends State<_PieChart> {
   }
 }
 
-// ── 城市分布柱状图 ──
+// ── 城市分布（胶囊切换：排行 / 地图）──
 
-class _CityBarCard extends ConsumerWidget {
+class _CityBarCard extends ConsumerStatefulWidget {
+  const _CityBarCard({super.key});
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_CityBarCard> createState() => _CityBarCardState();
+}
+
+class _CityBarCardState extends ConsumerState<_CityBarCard> {
+  int _tabIndex = 0; // 0 = 城市排行, 1 = 地图视图
+
+  @override
+  Widget build(BuildContext context) {
     final cityAsync = ref.watch(cityDistributionProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF1E1F2D).withOpacity(0.85)
-            : Colors.white.withOpacity(0.85),
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: isDark
-                ? Colors.black.withOpacity(0.2)
-                : Colors.black.withOpacity(0.04),
+            color: Theme.of(context).colorScheme.shadow.withOpacity(0.06),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -434,20 +447,130 @@ class _CityBarCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('拍摄城市分布',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    )),
+            // ── 标题行 + 胶囊切换 ──
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // 左：图标 + 主标题 + 副标题
+                Icon(Icons.map_outlined, size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('拍摄城市分布',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            )),
+                    Text(_tabIndex == 0 ? '按城市聚合照片数量' : '照片地理位置分布',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.6),
+                        )),
+                  ],
+                ),
+                const Spacer(),
+                // 右：胶囊切换按钮
+                _CapsuleToggle(
+                  selectedIndex: _tabIndex,
+                  labels: const ['城市排行', '地图视图'],
+                  onChanged: (i) => setState(() => _tabIndex = i),
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
-            cityAsync.when(
-              loading: () => const SizedBox(
-                  height: 200,
-                  child: Center(child: CircularProgressIndicator())),
-              error: (e, _) => Text('$e'),
-              data: (cityMap) => _CityBarChart(cityMap: cityMap),
+            // ── 内容区 ──
+            SizedBox(
+              height: 420,
+              child: IndexedStack(
+                index: _tabIndex,
+                children: [
+                  // Tab 0: 城市排行（柱状图）
+                  cityAsync.when(
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(
+                      child: Text('$e', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                    ),
+                    data: (cityMap) => _CityBarChart(cityMap: cityMap),
+                  ),
+                  // Tab 1: 地图视图
+                  cityAsync.when(
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(
+                      child: Text('$e', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                    ),
+                    data: (cityMap) {
+                      if (cityMap.isEmpty) {
+                        return Center(
+                          child: Text('暂无 GPS 城市数据',
+                              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                        );
+                      }
+                      return const PhotoMapWidget();
+                    },
+                  ),
+                ],
+              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 胶囊切换组件（自动适配明暗主题）
+class _CapsuleToggle extends StatelessWidget {
+  final int selectedIndex;
+  final List<String> labels;
+  final ValueChanged<int> onChanged;
+
+  const _CapsuleToggle({
+    required this.selectedIndex,
+    required this.labels,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      height: 32,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(labels.length, (i) {
+          final isSelected = i == selectedIndex;
+          return GestureDetector(
+            onTap: () => onChanged(i),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              height: 32,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: isSelected ? cs.surface : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+                border: isSelected
+                    ? Border.all(color: cs.outlineVariant, width: 0.5)
+                    : null,
+              ),
+              child: Text(
+                labels[i],
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                  color: isSelected ? cs.onSurface : cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+          );
+        }),
       ),
     );
   }

@@ -274,7 +274,6 @@ class AppShell extends ConsumerStatefulWidget {
 }
 
 class _AppShellState extends ConsumerState<AppShell> with WindowListener, SingleTickerProviderStateMixin {
-  int _selectedIndex = 0;
   int _lastRefreshSignal = 0;
   bool _isExiting = false;
   late AnimationController _exitAnimationController;
@@ -464,13 +463,13 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
           child: Row(
             children: [
               _CapsuleNavRail(
-                selectedIndex: _selectedIndex,
+                selectedIndex: ref.watch(currentPageProvider),
                 items: _navItems,
-                onSelect: (i) => setState(() => _selectedIndex = i),
+                onSelect: (i) => ref.read(currentPageProvider.notifier).state = i,
               ),
               Expanded(
                 child: IndexedStack(
-                  index: _selectedIndex,
+                  index: ref.watch(currentPageProvider),
                   children: const [
                     BrowserPage(),
                     DashboardPage(),
