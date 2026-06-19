@@ -45,6 +45,7 @@ const _imageExts = {
 enum ScanPhase {
   indexing, // 正在索引文件（MD5 + EXIF + 入库）
   reconciling, // 正在对账（标记磁盘已删除的文件）
+  rebuildingIndex, // 正在重建时间轴索引
   generatingThumbnails, // 正在补生成缩略图
 }
 
@@ -316,6 +317,25 @@ class MediaScanner {
         phase: ScanPhase.reconciling,
       );
       await _performReconciliation(folderPath, files.length, controller);
+    }
+
+    // 重建时间轴索引表
+    if (!(controller?.shouldStop() ?? false)) {
+      yield ScanProgress(
+        current: files.length,
+        total: files.length,
+        currentFile: '正在更新时间轴索引...',
+        added: added,
+        duplicates: duplicates,
+        updated: updated,
+        phase: ScanPhase.rebuildingIndex,
+      );
+      try {
+        await _db.rebuildDateIndexes();
+        debugPrint('📅 时间轴索引表已重建');
+      } catch (e) {
+        debugPrint('❌ 重建时间轴索引失败: $e');
+      }
     }
 
     controller?.complete();

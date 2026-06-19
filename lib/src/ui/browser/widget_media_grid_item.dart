@@ -4,6 +4,7 @@
 // + 选中态 / 多选态
 // + 懒加载：只有「视口上下各 ~20 项」热区才渲染缩略图，其他用占位
 // ============================================================
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -36,10 +37,28 @@ class _MediaGridItemState extends ConsumerState<MediaGridItem> {
   /// false = 冷区，用占位 widget（只读数据库元数据，不触发 IO/解码）。
   bool _hot = false;
 
+  /// true = 正在滚动（滚动停止 150ms 内仍算滚动），抑制原图升级
+  bool _scrolling = false;
+
+  /// 滚动停止判定：每次 scroll 事件重置此 timer，
+  /// timer 到期表示滚动已停止。
+  Timer? _scrollStopTimer;
+
+  /// 滚动停止判定阈值（150ms 无 scroll 事件即认为停止）
+  static const _kScrollStopDelay = Duration(milliseconds: 150);
+
   ScrollPosition? _watchedPos;
   void _onScroll() {
     if (!mounted) return;
-    // 滚动事件 + 自身位置变化时重算热区
+    // 标记为"正在滚动"，取消旧 timer，启动新 timer
+    if (!_scrolling) {
+      setState(() => _scrolling = true);
+    }
+    _scrollStopTimer?.cancel();
+    _scrollStopTimer = Timer(_kScrollStopDelay, () {
+      if (!mounted) return;
+      setState(() => _scrolling = false);
+    });
     _recomputeHot();
   }
 
@@ -75,6 +94,7 @@ class _MediaGridItemState extends ConsumerState<MediaGridItem> {
 
   @override
   void dispose() {
+    _scrollStopTimer?.cancel();
     _watchedPos?.removeListener(_onScroll);
     _watchedPos = null;
     super.dispose();
@@ -179,6 +199,7 @@ class _MediaGridItemState extends ConsumerState<MediaGridItem> {
                           : PixelThumb(
                               item: meta.item,
                               hot: () => _hot,
+                              scrolling: _scrolling,
                             ),
                     ),
                     // 底部信息行：标签 + 日期 + 文件名

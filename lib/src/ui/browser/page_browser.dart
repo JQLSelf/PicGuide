@@ -699,6 +699,16 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     try {
       final missing = await db.reconcileAll();
       if (!mounted) return;
+
+      // 对账后重建时间轴索引（缺失文件已标记，需要重新计算）
+      ref.read(scanStateProvider.notifier).state = const ScanProgress(
+          current: 0,
+          total: 1,
+          currentFile: '更新时间轴索引中…',
+          phase: ScanPhase.rebuildingIndex);
+      await db.rebuildDateIndexes();
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('对账完成，${missing} 个文件标记为缺失')),
       );
@@ -3661,109 +3671,229 @@ class _TimelineScaffoldState extends ConsumerState<_TimelineScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    final asyncMedia = ref.watch(browserMediaProvider);
+    // 从 MediaDateIndexes 表获取月度桶数据（不依赖全量媒体加载）
+    final bucketsAsync = ref.watch(timelineBucketsProvider);
     // 联动：监听"激活桶"——图片网格滚动时自动更新
     final activeBucket = ref.watch(activeTimelineBucketProvider);
-    return asyncMedia.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('$e')),
-      data: (items) {
-        if (items.isEmpty) return widget.child;
-        // 时间轴：图片本身的"创建时间"——
-        // 优先级：EXIF DateTimeOriginal > 磁盘 mtime > 归档时间
-        final sorted = [...items]..sort((a, b) {
-            final ad = _timelineTimeOf(a);
-            final bd = _timelineTimeOf(b);
-            return bd.compareTo(ad);
-          });
-        // 桶 = "YYYY-MM" 段
-        final buckets = <String, int>{};
-        // 桶 → 该桶在 sorted 数组中首项下标（用于点击右侧时间轴时估算 offset）
-        final firstIndex = <String, int>{};
-        for (int i = 0; i < sorted.length; i++) {
-          final m = sorted[i];
-          final key = _bucketKeyOf(m);
-          buckets[key] = (buckets[key] ?? 0) + 1;
-          firstIndex.putIfAbsent(key, () => i);
-        }
-        // 把"桶 → 首项 index + 总数"同步给 provider，供点击跳转用
-        // （必须延后到 build 之外以避免 Riverpod 的 build 阶段告警）
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          ref.read(timelineLinkProvider.notifier).setBucketLayout(
-                bucketFirstIndex: Map<String, int>.from(firstIndex),
-                totalItemCount: sorted.length,
-              );
-        });
-        final bucketList = buckets.keys.toList()
-          ..sort((a, b) => b.compareTo(a));
 
-        return Row(
-          children: [
-            Expanded(child: widget.child),
-            Container(
-              width: 110,
-              decoration: BoxDecoration(
-                border: Border(
-                    left: BorderSide(color: Theme.of(context).dividerColor)),
-              ),
-              child: Scrollbar(
-                controller: _sidebarScroll,
-                thumbVisibility: true,
-                child: ListView.builder(
-                  controller: _sidebarScroll,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: bucketList.length,
-                  itemBuilder: (_, i) {
-                    final key = bucketList[i];
-                    final selected = key == activeBucket;
-                    return InkWell(
-                      onTap: () => _onBucketTap(key),
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withOpacity(0.12)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              key,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: selected
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                                color: selected
-                                    ? Theme.of(context).colorScheme.primary
-                                    : null,
-                              ),
-                            ),
-                            Text(
-                              '${buckets[key]} 张',
-                              style: const TextStyle(
-                                  fontSize: 10, color: Colors.grey),
-                            ),
-                          ],
-                        ),
+    // 仍然从 browserMediaProvider 获取排序后的全量列表用于计算
+    // bucketFirstIndex（给点击跳转的 offset 估算使用）
+    final asyncMedia = ref.watch(browserMediaProvider);
+
+    return bucketsAsync.when(
+      loading: () => asyncMedia.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('$e')),
+        data: (items) => _buildWithMedia(items, activeBucket),
+      ),
+      error: (e, _) => Center(child: Text('$e')),
+      data: (buckets) => _buildWithBuckets(buckets, activeBucket, asyncMedia),
+    );
+  }
+
+  /// 使用 MediaDateIndexes 表的桶数据构建侧边栏
+  Widget _buildWithBuckets(
+    List<MonthlyBucket> buckets,
+    String? activeBucket,
+    AsyncValue<List<MediaItemWithMeta>> asyncMedia,
+  ) {
+    if (buckets.isEmpty) return widget.child;
+
+    // 仍然从媒体列表计算 bucketFirstIndex（供点击跳转估算 offset 使用）
+    asyncMedia.whenData((items) {
+      if (items.isEmpty) return;
+      final sorted = [...items]..sort((a, b) {
+          final ad = _timelineTimeOf(a);
+          final bd = _timelineTimeOf(b);
+          return bd.compareTo(ad);
+        });
+      final firstIndex = <String, int>{};
+      for (int i = 0; i < sorted.length; i++) {
+        firstIndex.putIfAbsent(_bucketKeyOf(sorted[i]), () => i);
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(timelineLinkProvider.notifier).setBucketLayout(
+              bucketFirstIndex: Map<String, int>.from(firstIndex),
+              totalItemCount: sorted.length,
+            );
+      });
+    });
+
+    return Row(
+      children: [
+        Expanded(child: widget.child),
+        _buildSidebar(buckets, activeBucket),
+      ],
+    );
+  }
+
+  /// 回退：当桶数据不可用时，从全量媒体列表构建
+  Widget _buildWithMedia(List<MediaItemWithMeta> items, String? activeBucket) {
+    if (items.isEmpty) return widget.child;
+    // 时间轴：图片本身的"创建时间"——
+    // 优先级：EXIF DateTimeOriginal > 磁盘 mtime > 归档时间
+    final sorted = [...items]..sort((a, b) {
+        final ad = _timelineTimeOf(a);
+        final bd = _timelineTimeOf(b);
+        return bd.compareTo(ad);
+      });
+    // 桶 = "YYYY-MM" 段
+    final buckets = <String, int>{};
+    // 桶 → 该桶在 sorted 数组中首项下标（用于点击右侧时间轴时估算 offset）
+    final firstIndex = <String, int>{};
+    for (int i = 0; i < sorted.length; i++) {
+      final m = sorted[i];
+      final key = _bucketKeyOf(m);
+      buckets[key] = (buckets[key] ?? 0) + 1;
+      firstIndex.putIfAbsent(key, () => i);
+    }
+    // 把"桶 → 首项 index + 总数"同步给 provider，供点击跳转用
+    // （必须延后到 build 之外以避免 Riverpod 的 build 阶段告警）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(timelineLinkProvider.notifier).setBucketLayout(
+            bucketFirstIndex: Map<String, int>.from(firstIndex),
+            totalItemCount: sorted.length,
+          );
+    });
+    final bucketList = buckets.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+
+    return Row(
+      children: [
+        Expanded(child: widget.child),
+        _buildSidebarFromMap(bucketList, buckets, activeBucket),
+      ],
+    );
+  }
+
+  /// 从 MonthlyBucket 列表构建侧边栏 UI
+  Widget _buildSidebar(List<MonthlyBucket> buckets, String? activeBucket) {
+    return Container(
+      width: 110,
+      decoration: BoxDecoration(
+        border:
+            Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Scrollbar(
+        controller: _sidebarScroll,
+        thumbVisibility: true,
+        child: ListView.builder(
+          controller: _sidebarScroll,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: buckets.length,
+          itemBuilder: (_, i) {
+            final bucket = buckets[i];
+            final selected = bucket.dateKey == activeBucket;
+            return InkWell(
+              onTap: () => _onBucketTap(bucket.dateKey),
+              child: Container(
+                margin: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withOpacity(0.12)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      bucket.dateKey,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
                       ),
-                    );
-                  },
+                    ),
+                    Text(
+                      '${bucket.count} 张',
+                      style: const TextStyle(
+                          fontSize: 10, color: Colors.grey),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
-        );
-      },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 从 Map 构建侧边栏 UI（回退路径）
+  Widget _buildSidebarFromMap(
+      List<String> bucketList, Map<String, int> buckets, String? activeBucket) {
+    return Container(
+      width: 110,
+      decoration: BoxDecoration(
+        border:
+            Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Scrollbar(
+        controller: _sidebarScroll,
+        thumbVisibility: true,
+        child: ListView.builder(
+          controller: _sidebarScroll,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: bucketList.length,
+          itemBuilder: (_, i) {
+            final key = bucketList[i];
+            final selected = key == activeBucket;
+            return InkWell(
+              onTap: () => _onBucketTap(key),
+              child: Container(
+                margin: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withOpacity(0.12)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      key,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                      ),
+                    ),
+                    Text(
+                      '${buckets[key]} 张',
+                      style: const TextStyle(
+                          fontSize: 10, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 

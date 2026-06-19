@@ -2,9 +2,10 @@
 // lib/src/db/database.dart
 // drift 跨平台 SQLite 数据库定义
 // 生成命令: dart run build_runner build --delete-conflicting-outputs
-// schemaVersion: 3
+// schemaVersion: 4
 //   v1 -> v2: 增 md5 / isMissing
 //   v2 -> v3: 增 exifDatas.province / district（离线反查省市县）
+//   v3 -> v4: 增 mediaDateIndexes 时间轴索引表
 // ============================================================
 import 'dart:io';
 import 'package:drift/drift.dart';
@@ -107,16 +108,41 @@ class FolderScans extends Table {
   IntColumn get missingCount => integer().withDefault(const Constant(0))();
 }
 
+/// 时间轴日期索引表（加速时间轴侧边栏跳转）
+/// 每条记录表示一个日期（如 2024-01-15）有多少张照片，以及它们在全库排序中的起始偏移量
+@DataClassName('MediaDateIndex')
+class MediaDateIndexes extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get dateKey => text().unique()(); // 'YYYY-MM-DD'
+  IntColumn get count => integer().withDefault(const Constant(0))();
+  IntColumn get firstOffset =>
+      integer().withDefault(const Constant(0))(); // 起始偏移量（废弃，改用实时计算）
+  DateTimeColumn get updatedAt =>
+      dateTime().withDefault(currentDateAndTime)();
+}
+
+/// 月份桶（用于时间轴侧边栏，YYYY-MM 粒度）
+class MonthlyBucket {
+  final String dateKey; // 'YYYY-MM'
+  final int count;
+  final int firstOffset; // 该月首项在排序后的全库列表中的偏移量
+  const MonthlyBucket({
+    required this.dateKey,
+    required this.count,
+    required this.firstOffset,
+  });
+}
+
 // ─────────────────────────────────────────────
 // 数据库类
 // ─────────────────────────────────────────────
 
-@DriftDatabase(tables: [MediaItems, ExifDatas, Tags, MediaTags, FolderScans])
+@DriftDatabase(tables: [MediaItems, ExifDatas, Tags, MediaTags, FolderScans, MediaDateIndexes])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -135,6 +161,10 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(exifDatas, exifDatas.province);
             await m.addColumn(exifDatas, exifDatas.district);
           }
+          // v3 -> v4: 增 mediaDateIndexes 时间轴索引表
+          if (from < 4) {
+            await m.createTable(mediaDateIndexes);
+          }
         },
       );
 
@@ -150,7 +180,7 @@ class AppDatabase extends _$AppDatabase {
     }
     query.orderBy([(t) => OrderingTerm.desc(t.indexedAt)]);
     final items = await query.get();
-    return Future.wait(items.map(_enrichItem));
+    return enrichItems(items);
   }
 
   /// 按"模拟文件夹"获取（按 filePath 前缀）
@@ -172,7 +202,7 @@ class AppDatabase extends _$AppDatabase {
           ..where((t) => t.isDeleted.equals(false))
           ..orderBy([(t) => OrderingTerm.desc(t.indexedAt)]))
         .get();
-    return Future.wait(items.map(_enrichItem));
+    return enrichItems(items);
   }
 
   /// 列出已归档的所有文件夹（扁平列表，保留兼容）
@@ -318,7 +348,7 @@ class AppDatabase extends _$AppDatabase {
       final relative = item.filePath.substring(actualPrefix.length);
       return !relative.contains('\\') && !relative.contains('/');
     }).toList();
-    return Future.wait(direct.map(_enrichItem));
+    return enrichItems(direct);
   }
 
   /// 获取指定文件夹的直接子目录及其文件计数
@@ -352,18 +382,46 @@ class AppDatabase extends _$AppDatabase {
   static String _escapeLike(String s) =>
       s.replaceAll('%', '\\%').replaceAll('_', '\\_');
 
-  Future<MediaItemWithMeta> _enrichItem(MediaItem item) async {
-    final exif = await (select(exifDatas)
-          ..where((e) => e.mediaItemId.equals(item.id)))
-        .getSingleOrNull();
-    final tagIdList = await (select(mediaTags)
-          ..where((mt) => mt.mediaItemId.equals(item.id)))
-        .get()
-        .then((rows) => rows.map((r) => r.tagId).toList());
-    final fetchedTags = tagIdList.isEmpty
+  /// 批量富化：一次性查询所有 EXIF 和 Tags，消除 N+1
+  /// 保持与 items 相同的顺序
+  Future<List<MediaItemWithMeta>> enrichItems(List<MediaItem> items) async {
+    if (items.isEmpty) return [];
+    final ids = items.map((i) => i.id).toList();
+
+    // 批量加载 EXIF
+    final exifRows = await (select(exifDatas)
+          ..where((e) => e.mediaItemId.isIn(ids)))
+        .get();
+    final exifMap = {for (final e in exifRows) e.mediaItemId: e};
+
+    // 批量加载媒体-标签关联
+    final mtRows = await (select(mediaTags)
+          ..where((mt) => mt.mediaItemId.isIn(ids)))
+        .get();
+    final tagIdSet = mtRows.map((r) => r.tagId).toSet();
+
+    // 批量加载标签
+    final allTags = tagIdSet.isEmpty
         ? <Tag>[]
-        : await (select(tags)..where((t) => t.id.isIn(tagIdList))).get();
-    return MediaItemWithMeta(item: item, exif: exif, tags: fetchedTags);
+        : await (select(tags)..where((t) => t.id.isIn(tagIdSet))).get();
+    final tagMap = {for (final t in allTags) t.id: t};
+
+    // 按 mediaItemId 分组 tag
+    final mediaTagMap = <int, List<Tag>>{};
+    for (final mt in mtRows) {
+      mediaTagMap.putIfAbsent(mt.mediaItemId, () => []);
+      final tag = tagMap[mt.tagId];
+      if (tag != null) {
+        mediaTagMap[mt.mediaItemId]!.add(tag);
+      }
+    }
+
+    // 保持原始顺序返回
+    return items.map((item) => MediaItemWithMeta(
+          item: item,
+          exif: exifMap[item.id],
+          tags: mediaTagMap[item.id] ?? [],
+        )).toList();
   }
 
   /// 按标签筛选
@@ -472,9 +530,188 @@ class AppDatabase extends _$AppDatabase {
   Future<void> upsertExif(ExifDatasCompanion exif) =>
       into(exifDatas).insertOnConflictUpdate(exif);
 
+  // ── 时间轴索引表操作 ──
+
+  /// 插入或更新日期索引（增量更新 count）
+  Future<void> upsertDateIndex(String dateKey, {int delta = 1}) async {
+    final existing = await (select(mediaDateIndexes)
+          ..where((t) => t.dateKey.equals(dateKey)))
+        .getSingleOrNull();
+    if (existing == null) {
+      await into(mediaDateIndexes).insert(MediaDateIndexesCompanion.insert(
+            dateKey: dateKey,
+            count: Value(delta),
+            firstOffset: const Value(0), // 不再使用，实时计算
+          ));
+    } else {
+      final newCount = existing.count + delta;
+      if (newCount <= 0) {
+        // 计数为 0 或负数，删除该日期索引
+        await (delete(mediaDateIndexes)
+              ..where((t) => t.dateKey.equals(dateKey)))
+            .go();
+      } else {
+        await (update(mediaDateIndexes)..where((t) => t.dateKey.equals(dateKey)))
+            .write(MediaDateIndexesCompanion(
+          count: Value(newCount),
+          updatedAt: Value(DateTime.now()),
+        ));
+      }
+    }
+  }
+
+  /// 获取所有日期索引（按 dateKey 降序，用于时间轴侧边栏）
+  Future<List<MediaDateIndex>> getDateIndexes() async {
+    return (select(mediaDateIndexes)
+          ..orderBy([(t) => OrderingTerm.desc(t.dateKey)]))
+        .get();
+  }
+
+  /// 按月聚合日期索引（用于时间轴侧边栏的"YYYY-MM"桶展示）
+  /// 从 MediaDateIndexes 表中读取每日数据，聚合为月度统计
+  Future<List<MonthlyBucket>> getMonthlyDateBuckets() async {
+    final dailyIndexes = await getDateIndexes();
+
+    final monthMap = <String, int>{};
+    for (final idx in dailyIndexes) {
+      // dateKey = "YYYY-MM-DD" → "YYYY-MM"
+      final monthKey = idx.dateKey.substring(0, 7);
+      monthMap[monthKey] = (monthMap[monthKey] ?? 0) + idx.count;
+    }
+
+    // 按月降序排列
+    final sortedMonths = monthMap.keys.toList()..sort((a, b) => b.compareTo(a));
+    final result = <MonthlyBucket>[];
+    int runningOffset = 0;
+    for (final dateKey in sortedMonths) {
+      result.add(MonthlyBucket(
+        dateKey: dateKey,
+        count: monthMap[dateKey]!,
+        firstOffset: runningOffset,
+      ));
+      runningOffset += monthMap[dateKey]!;
+    }
+    return result;
+  }
+
+  /// 删除指定日期的索引
+  Future<void> deleteDateIndex(String dateKey) async {
+    await (delete(mediaDateIndexes)
+          ..where((t) => t.dateKey.equals(dateKey)))
+        .go();
+  }
+
+  /// 全量重建日期索引（用于全盘重扫）
+  /// 返回重建后的日期索引列表
+  Future<List<MediaDateIndex>> rebuildDateIndexes() async {
+    // 1. 清空现有索引
+    await (delete(mediaDateIndexes)).go();
+
+    // 2. 查询所有未软删/未缺失的照片
+    final rows = await (select(mediaItems)
+          ..where((t) => t.isDeleted.equals(false))
+          ..where((t) => t.isMissing.equals(false)))
+        .get();
+    if (rows.isEmpty) return [];
+
+    // 3. 批量加载所有 EXIF 数据（避免 N+1）
+    final ids = rows.map((r) => r.id).toList();
+    final allExif = await (select(exifDatas)
+          ..where((e) => e.mediaItemId.isIn(ids)))
+        .get();
+    final exifMap = {for (final e in allExif) e.mediaItemId: e};
+
+    // 4. 按日期分组计数
+    final dateCountMap = <String, int>{};
+    for (final item in rows) {
+      final exif = exifMap[item.id];
+      DateTime dateTaken;
+      if (exif?.dateTaken != null) {
+        dateTaken = exif!.dateTaken!;
+      } else {
+        dateTaken = item.fileModifiedAt ?? item.indexedAt ?? DateTime.now();
+      }
+      final dateKey = _formatDateKey(dateTaken);
+      dateCountMap[dateKey] = (dateCountMap[dateKey] ?? 0) + 1;
+    }
+
+    // 5. 批量插入新的索引（按日期降序）
+    final sortedKeys = dateCountMap.keys.toList()
+      ..sort((a, b) => b.compareTo(a)); // 降序
+
+    for (final dateKey in sortedKeys) {
+      await into(mediaDateIndexes).insert(MediaDateIndexesCompanion.insert(
+            dateKey: dateKey,
+            count: Value(dateCountMap[dateKey]!),
+            firstOffset: const Value(0), // 不再使用，实时计算
+          ));
+    }
+
+    // 6. 返回重建后的索引
+    return getDateIndexes();
+  }
+
+  /// 减少指定日期的计数（用于软删除）
+  Future<void> decrementDateIndexCount(List<int> mediaIds) async {
+    if (mediaIds.isEmpty) return;
+
+    // 查询这些媒体的日期
+    final items = await (select(mediaItems)
+          ..where((t) => t.id.isIn(mediaIds)))
+        .get();
+    if (items.isEmpty) return;
+
+    // 批量加载这些媒体的 EXIF 数据（避免 N+1）
+    final allExif = await (select(exifDatas)
+          ..where((e) => e.mediaItemId.isIn(mediaIds)))
+        .get();
+    final exifMap = {for (final e in allExif) e.mediaItemId: e};
+
+    // 按日期分组，统计每个日期需要减少的计数
+    final dateDeltaMap = <String, int>{};
+    for (final item in items) {
+      final exif = exifMap[item.id];
+      DateTime dateTaken;
+      if (exif?.dateTaken != null) {
+        dateTaken = exif!.dateTaken!;
+      } else {
+        dateTaken = item.fileModifiedAt ?? item.indexedAt ?? DateTime.now();
+      }
+      final dateKey = _formatDateKey(dateTaken);
+      dateDeltaMap[dateKey] = (dateDeltaMap[dateKey] ?? 0) + 1;
+    }
+
+    // 更新每个日期的计数
+    for (final entry in dateDeltaMap.entries) {
+      await upsertDateIndex(entry.key, delta: -entry.value);
+    }
+  }
+
+  /// 获取某日期的起始偏移量（实时计算，不依赖 firstOffset）
+  Future<int> getDateOffset(String dateKey) async {
+    // 计算比 dateKey 更新的所有日期的 count 之和
+    final rows = await (select(mediaDateIndexes)
+          ..where((t) => t.dateKey.isBiggerThanValue(dateKey)))
+        .get();
+    return rows.fold<int>(0, (sum, r) => sum + r.count);
+  }
+
+  /// 格式化日期为 YYYY-MM-DD
+  String _formatDateKey(DateTime date) {
+    return '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+  }
+
   /// 软删除：把 isDeleted 置为 true
+  /// 同时维护时间轴索引表
   Future<void> softDeleteMedia(List<int> ids) async {
     if (ids.isEmpty) return;
+
+    // 1. 先减少时间轴索引表中对应日期的计数
+    await decrementDateIndexCount(ids);
+
+    // 2. 执行软删除
     await (update(mediaItems)..where((t) => t.id.isIn(ids)))
         .write(const MediaItemsCompanion(isDeleted: Value(true)));
   }
@@ -648,7 +885,8 @@ LazyDatabase _openConnection() {
     // 使用 PathHelper 获取安装目录下的数据路径
     await PathHelper.instance.initialize();
     final dbPath = PathHelper.instance.databasePath;
-    return NativeDatabase(File(dbPath));
+    // 在后台 isolate 中运行数据库，不阻塞主线程
+    return NativeDatabase.createInBackground(File(dbPath));
   });
 }
 

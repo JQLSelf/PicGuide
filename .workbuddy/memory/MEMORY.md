@@ -1,4 +1,4 @@
-# PixelVault 项目记忆 (2026-06-16)
+# PixelVault 项目记忆 (2026-06-19)
 
 ## 扫描引擎优化 (P0~P5)
 
@@ -41,3 +41,21 @@
 ## 文件夹树文字颜色适配（已完成）
 - `page_browser.dart` 中 4 处图片数量文字（`node.fileCount`、子文件夹卡片等）改为明暗适配
 - 白天 `black54/black45`，黑暗 `white70/white54`
+
+## Optimizations Step (2026-06-19)
+
+### Step 1 — DB 迁移到 Isolate（已完成）
+- `_openConnection()` 改为 `NativeDatabase.createInBackground()`，所有数据库操作在后台 isolate 执行
+
+### Step 2 — 消除 N+1 查询（已完成）
+- 新增 `enrichItems()` 批量方法：一次查询 EXIF、mediaTags、tags 三张表，替代逐条查询
+- 替换了 `getAllMedia()`、`getMediaInFolder()`、`getDirectMediaInFolder()` 三处的 `Future.wait` 调用
+- 删除了不再使用的 `_enrichItem()` 方法
+- 从 N+1 降为 3 次查询
+
+### Step 4 — 时间轴索引表（已完成）
+- 新增 `MediaDateIndexes` 表定义，schemaVersion 升级到 4
+- 新增 `rebuildDateIndexes()` / `decrementDateIndexCount()` / `getMonthlyDateBuckets()` 等方法
+- 扫描完成后自动重建索引；软删除时自动维护
+- 全库对账后也自动重建索引
+- 侧边栏改造为使用 `timelineBucketsProvider` 从索引表加载数据

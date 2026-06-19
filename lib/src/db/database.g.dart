@@ -2269,6 +2269,306 @@ class FolderScansCompanion extends UpdateCompanion<FolderScan> {
   }
 }
 
+class $MediaDateIndexesTable extends MediaDateIndexes
+    with TableInfo<$MediaDateIndexesTable, MediaDateIndex> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MediaDateIndexesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _dateKeyMeta =
+      const VerificationMeta('dateKey');
+  @override
+  late final GeneratedColumn<String> dateKey = GeneratedColumn<String>(
+      'date_key', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'));
+  static const VerificationMeta _countMeta = const VerificationMeta('count');
+  @override
+  late final GeneratedColumn<int> count = GeneratedColumn<int>(
+      'count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _firstOffsetMeta =
+      const VerificationMeta('firstOffset');
+  @override
+  late final GeneratedColumn<int> firstOffset = GeneratedColumn<int>(
+      'first_offset', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      defaultValue: currentDateAndTime);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, dateKey, count, firstOffset, updatedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'media_date_indexes';
+  @override
+  VerificationContext validateIntegrity(Insertable<MediaDateIndex> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('date_key')) {
+      context.handle(_dateKeyMeta,
+          dateKey.isAcceptableOrUnknown(data['date_key']!, _dateKeyMeta));
+    } else if (isInserting) {
+      context.missing(_dateKeyMeta);
+    }
+    if (data.containsKey('count')) {
+      context.handle(
+          _countMeta, count.isAcceptableOrUnknown(data['count']!, _countMeta));
+    }
+    if (data.containsKey('first_offset')) {
+      context.handle(
+          _firstOffsetMeta,
+          firstOffset.isAcceptableOrUnknown(
+              data['first_offset']!, _firstOffsetMeta));
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  MediaDateIndex map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MediaDateIndex(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      dateKey: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}date_key'])!,
+      count: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}count'])!,
+      firstOffset: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}first_offset'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at'])!,
+    );
+  }
+
+  @override
+  $MediaDateIndexesTable createAlias(String alias) {
+    return $MediaDateIndexesTable(attachedDatabase, alias);
+  }
+}
+
+class MediaDateIndex extends DataClass implements Insertable<MediaDateIndex> {
+  final int id;
+  final String dateKey;
+  final int count;
+  final int firstOffset;
+  final DateTime updatedAt;
+  const MediaDateIndex(
+      {required this.id,
+      required this.dateKey,
+      required this.count,
+      required this.firstOffset,
+      required this.updatedAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['date_key'] = Variable<String>(dateKey);
+    map['count'] = Variable<int>(count);
+    map['first_offset'] = Variable<int>(firstOffset);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  MediaDateIndexesCompanion toCompanion(bool nullToAbsent) {
+    return MediaDateIndexesCompanion(
+      id: Value(id),
+      dateKey: Value(dateKey),
+      count: Value(count),
+      firstOffset: Value(firstOffset),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory MediaDateIndex.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MediaDateIndex(
+      id: serializer.fromJson<int>(json['id']),
+      dateKey: serializer.fromJson<String>(json['dateKey']),
+      count: serializer.fromJson<int>(json['count']),
+      firstOffset: serializer.fromJson<int>(json['firstOffset']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'dateKey': serializer.toJson<String>(dateKey),
+      'count': serializer.toJson<int>(count),
+      'firstOffset': serializer.toJson<int>(firstOffset),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  MediaDateIndex copyWith(
+          {int? id,
+          String? dateKey,
+          int? count,
+          int? firstOffset,
+          DateTime? updatedAt}) =>
+      MediaDateIndex(
+        id: id ?? this.id,
+        dateKey: dateKey ?? this.dateKey,
+        count: count ?? this.count,
+        firstOffset: firstOffset ?? this.firstOffset,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+  MediaDateIndex copyWithCompanion(MediaDateIndexesCompanion data) {
+    return MediaDateIndex(
+      id: data.id.present ? data.id.value : this.id,
+      dateKey: data.dateKey.present ? data.dateKey.value : this.dateKey,
+      count: data.count.present ? data.count.value : this.count,
+      firstOffset:
+          data.firstOffset.present ? data.firstOffset.value : this.firstOffset,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MediaDateIndex(')
+          ..write('id: $id, ')
+          ..write('dateKey: $dateKey, ')
+          ..write('count: $count, ')
+          ..write('firstOffset: $firstOffset, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, dateKey, count, firstOffset, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MediaDateIndex &&
+          other.id == this.id &&
+          other.dateKey == this.dateKey &&
+          other.count == this.count &&
+          other.firstOffset == this.firstOffset &&
+          other.updatedAt == this.updatedAt);
+}
+
+class MediaDateIndexesCompanion extends UpdateCompanion<MediaDateIndex> {
+  final Value<int> id;
+  final Value<String> dateKey;
+  final Value<int> count;
+  final Value<int> firstOffset;
+  final Value<DateTime> updatedAt;
+  const MediaDateIndexesCompanion({
+    this.id = const Value.absent(),
+    this.dateKey = const Value.absent(),
+    this.count = const Value.absent(),
+    this.firstOffset = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  });
+  MediaDateIndexesCompanion.insert({
+    this.id = const Value.absent(),
+    required String dateKey,
+    this.count = const Value.absent(),
+    this.firstOffset = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  }) : dateKey = Value(dateKey);
+  static Insertable<MediaDateIndex> custom({
+    Expression<int>? id,
+    Expression<String>? dateKey,
+    Expression<int>? count,
+    Expression<int>? firstOffset,
+    Expression<DateTime>? updatedAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (dateKey != null) 'date_key': dateKey,
+      if (count != null) 'count': count,
+      if (firstOffset != null) 'first_offset': firstOffset,
+      if (updatedAt != null) 'updated_at': updatedAt,
+    });
+  }
+
+  MediaDateIndexesCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? dateKey,
+      Value<int>? count,
+      Value<int>? firstOffset,
+      Value<DateTime>? updatedAt}) {
+    return MediaDateIndexesCompanion(
+      id: id ?? this.id,
+      dateKey: dateKey ?? this.dateKey,
+      count: count ?? this.count,
+      firstOffset: firstOffset ?? this.firstOffset,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (dateKey.present) {
+      map['date_key'] = Variable<String>(dateKey.value);
+    }
+    if (count.present) {
+      map['count'] = Variable<int>(count.value);
+    }
+    if (firstOffset.present) {
+      map['first_offset'] = Variable<int>(firstOffset.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MediaDateIndexesCompanion(')
+          ..write('id: $id, ')
+          ..write('dateKey: $dateKey, ')
+          ..write('count: $count, ')
+          ..write('firstOffset: $firstOffset, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2277,12 +2577,14 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $TagsTable tags = $TagsTable(this);
   late final $MediaTagsTable mediaTags = $MediaTagsTable(this);
   late final $FolderScansTable folderScans = $FolderScansTable(this);
+  late final $MediaDateIndexesTable mediaDateIndexes =
+      $MediaDateIndexesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities =>
-      [mediaItems, exifDatas, tags, mediaTags, folderScans];
+      [mediaItems, exifDatas, tags, mediaTags, folderScans, mediaDateIndexes];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
         [
@@ -3909,6 +4211,174 @@ typedef $$FolderScansTableProcessedTableManager = ProcessedTableManager<
     (FolderScan, BaseReferences<_$AppDatabase, $FolderScansTable, FolderScan>),
     FolderScan,
     PrefetchHooks Function()>;
+typedef $$MediaDateIndexesTableCreateCompanionBuilder
+    = MediaDateIndexesCompanion Function({
+  Value<int> id,
+  required String dateKey,
+  Value<int> count,
+  Value<int> firstOffset,
+  Value<DateTime> updatedAt,
+});
+typedef $$MediaDateIndexesTableUpdateCompanionBuilder
+    = MediaDateIndexesCompanion Function({
+  Value<int> id,
+  Value<String> dateKey,
+  Value<int> count,
+  Value<int> firstOffset,
+  Value<DateTime> updatedAt,
+});
+
+class $$MediaDateIndexesTableFilterComposer
+    extends Composer<_$AppDatabase, $MediaDateIndexesTable> {
+  $$MediaDateIndexesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get dateKey => $composableBuilder(
+      column: $table.dateKey, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get count => $composableBuilder(
+      column: $table.count, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get firstOffset => $composableBuilder(
+      column: $table.firstOffset, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$MediaDateIndexesTableOrderingComposer
+    extends Composer<_$AppDatabase, $MediaDateIndexesTable> {
+  $$MediaDateIndexesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get dateKey => $composableBuilder(
+      column: $table.dateKey, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get count => $composableBuilder(
+      column: $table.count, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get firstOffset => $composableBuilder(
+      column: $table.firstOffset, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$MediaDateIndexesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MediaDateIndexesTable> {
+  $$MediaDateIndexesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get dateKey =>
+      $composableBuilder(column: $table.dateKey, builder: (column) => column);
+
+  GeneratedColumn<int> get count =>
+      $composableBuilder(column: $table.count, builder: (column) => column);
+
+  GeneratedColumn<int> get firstOffset => $composableBuilder(
+      column: $table.firstOffset, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$MediaDateIndexesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $MediaDateIndexesTable,
+    MediaDateIndex,
+    $$MediaDateIndexesTableFilterComposer,
+    $$MediaDateIndexesTableOrderingComposer,
+    $$MediaDateIndexesTableAnnotationComposer,
+    $$MediaDateIndexesTableCreateCompanionBuilder,
+    $$MediaDateIndexesTableUpdateCompanionBuilder,
+    (
+      MediaDateIndex,
+      BaseReferences<_$AppDatabase, $MediaDateIndexesTable, MediaDateIndex>
+    ),
+    MediaDateIndex,
+    PrefetchHooks Function()> {
+  $$MediaDateIndexesTableTableManager(
+      _$AppDatabase db, $MediaDateIndexesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MediaDateIndexesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MediaDateIndexesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MediaDateIndexesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> dateKey = const Value.absent(),
+            Value<int> count = const Value.absent(),
+            Value<int> firstOffset = const Value.absent(),
+            Value<DateTime> updatedAt = const Value.absent(),
+          }) =>
+              MediaDateIndexesCompanion(
+            id: id,
+            dateKey: dateKey,
+            count: count,
+            firstOffset: firstOffset,
+            updatedAt: updatedAt,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required String dateKey,
+            Value<int> count = const Value.absent(),
+            Value<int> firstOffset = const Value.absent(),
+            Value<DateTime> updatedAt = const Value.absent(),
+          }) =>
+              MediaDateIndexesCompanion.insert(
+            id: id,
+            dateKey: dateKey,
+            count: count,
+            firstOffset: firstOffset,
+            updatedAt: updatedAt,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$MediaDateIndexesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $MediaDateIndexesTable,
+    MediaDateIndex,
+    $$MediaDateIndexesTableFilterComposer,
+    $$MediaDateIndexesTableOrderingComposer,
+    $$MediaDateIndexesTableAnnotationComposer,
+    $$MediaDateIndexesTableCreateCompanionBuilder,
+    $$MediaDateIndexesTableUpdateCompanionBuilder,
+    (
+      MediaDateIndex,
+      BaseReferences<_$AppDatabase, $MediaDateIndexesTable, MediaDateIndex>
+    ),
+    MediaDateIndex,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3922,4 +4392,6 @@ class $AppDatabaseManager {
       $$MediaTagsTableTableManager(_db, _db.mediaTags);
   $$FolderScansTableTableManager get folderScans =>
       $$FolderScansTableTableManager(_db, _db.folderScans);
+  $$MediaDateIndexesTableTableManager get mediaDateIndexes =>
+      $$MediaDateIndexesTableTableManager(_db, _db.mediaDateIndexes);
 }

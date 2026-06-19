@@ -22,7 +22,7 @@ import 'package:path/path.dart' as p;
 import '../../db/database.dart';
 
 /// 升级原图的等待时长：停留这么久都没滚动 / 离开视口 → 升级为原图解码
-const Duration kThumbUpgradeDelay = Duration(seconds: 20);
+const Duration kThumbUpgradeDelay = Duration(seconds: 5);
 
 /// 缩略图解码宽度上限（解码时缩小到 300 像素，节省内存/解码时间）
 const int kThumbCacheWidth = 300;
@@ -62,7 +62,12 @@ class PixelThumb extends StatefulWidget {
   /// 外部 hot 决策回调（true → 显示图片；false → 显示占位）
   final PixelThumbHotProvider hot;
 
-  /// 停留超过这个时长后，升级为原图解码。
+  /// 外部滚动状态（true = 正在滚动；false = 已静止）。
+  /// 仅当 scrolling == false 且 hot == true 时，升级计时才会计时。
+  /// 默认 false（静态场景永远不抑制升级）。
+  final bool scrolling;
+
+  /// 停留超过这个时长（且 scrolling == false）后，升级为原图解码。
   final Duration upgradeAfter;
 
   /// 缩略图缺失 / 加载失败时的占位 widget（可选）
@@ -72,6 +77,7 @@ class PixelThumb extends StatefulWidget {
     super.key,
     required this.item,
     required this.hot,
+    this.scrolling = false,
     this.upgradeAfter = kThumbUpgradeDelay,
     this.errorBuilder,
   });
@@ -87,36 +93,37 @@ class _PixelThumbState extends State<PixelThumb> {
   /// 升级原图的 Timer
   Timer? _upgradeTimer;
 
-  /// 上一次 _hot 翻转的时间（用于"停留 X 秒"判定）
-  DateTime? _hotSince;
+  /// 上一次的 scrolling 状态（用于避免不必要的 timer 操作）
+  bool _lastScrolling = false;
 
   @override
   void initState() {
     super.initState();
-    _syncFromHot();
+    _sync();
   }
 
   @override
   void didUpdateWidget(covariant PixelThumb old) {
     super.didUpdateWidget(old);
-    _syncFromHot();
+    _sync();
   }
 
-  void _syncFromHot() {
+  void _sync() {
     final hot = widget.hot();
-    if (hot) {
-      // 冷 → 热：启动"停留即升级"计时
-      _hotSince ??= DateTime.now();
+    final scrolling = widget.scrolling;
+
+    if (hot && !scrolling) {
+      // 热区中 + 滚动已停止 → 启动升级计时
       _upgradeTimer ??= Timer(widget.upgradeAfter, _upgrade);
     } else {
-      // 热 → 冷：取消升级计时 + 降级回缩略图（释放原图解码的内存）
+      // 冷区 或 正在滚动 → 取消升级计时 + 降级
       _upgradeTimer?.cancel();
       _upgradeTimer = null;
-      _hotSince = null;
       if (_quality == PixelThumbQuality.full) {
         setState(() => _quality = PixelThumbQuality.thumb);
       }
     }
+    _lastScrolling = scrolling;
   }
 
   void _upgrade() {

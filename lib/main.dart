@@ -368,6 +368,10 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
         _playExitAnimation(),
       ]);
 
+      // 让 loading 动画至少展示约 1s，解决 destroy 过程阻塞主线程
+      // 导致 spinner 卡死的视觉问题。
+      await Future.delayed(const Duration(milliseconds: 600));
+
       await windowManager.destroy();
     }
   }

@@ -397,6 +397,8 @@ class _ScanProgressPanelState extends State<ScanProgressPanel> {
         return '扫描中';
       case ScanPhase.reconciling:
         return '对账中';
+      case ScanPhase.rebuildingIndex:
+        return '更新时间轴索引中';
       case ScanPhase.generatingThumbnails:
         return '生成缩略图中';
     }

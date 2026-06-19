@@ -121,3 +121,9 @@ class TimelineLinkNotifier extends StateNotifier<TimelineLinkState> {
 final timelineLinkProvider =
     StateNotifierProvider<TimelineLinkNotifier, TimelineLinkState>(
         (ref) => TimelineLinkNotifier());
+
+/// 时间轴侧边栏桶数据（按月聚合，来自 MediaDateIndexes 表）
+/// 不依赖于 browserMediaProvider，避免全量加载所有媒体项
+final timelineBucketsProvider = FutureProvider<List<MonthlyBucket>>((ref) {
+  return ref.read(databaseProvider).getMonthlyDateBuckets();
+});
