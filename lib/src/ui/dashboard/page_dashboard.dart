@@ -9,6 +9,7 @@ import 'package:drift/drift.dart' show innerJoin;
 import '../../db/database.dart';
 import '../../providers/provider_database.dart';
 import '../../providers/provider_app.dart';
+import '../browser/page_browser.dart' show BrowserMode, browserModeProvider, searchFiltersProvider;
 import '../widgets/dialog_manual_viewer.dart';
 import 'widget_photo_map.dart';
 
@@ -492,7 +493,18 @@ class _CityBarCardState extends ConsumerState<_CityBarCard> {
                     error: (e, _) => Center(
                       child: Text('$e', style: TextStyle(color: Theme.of(context).colorScheme.error)),
                     ),
-                    data: (cityMap) => _CityBarChart(cityMap: cityMap),
+                    data: (cityMap) => _CityBarChart(
+                      cityMap: cityMap,
+                      onCityTap: (city) {
+                        // 设置城市筛选条件 → 跳转到浏览器页
+                        final currentFilters = ref.read(searchFiltersProvider);
+                        ref.read(searchFiltersProvider.notifier).state =
+                            currentFilters.copyWith(cities: {city});
+                        ref.read(browserModeProvider.notifier).state =
+                            BrowserMode.timeline;
+                        ref.read(currentPageProvider.notifier).state = 0;
+                      },
+                    ),
                   ),
                   // Tab 1: 地图视图
                   cityAsync.when(
@@ -578,7 +590,8 @@ class _CapsuleToggle extends StatelessWidget {
 
 class _CityBarChart extends StatelessWidget {
   final Map<String, int> cityMap;
-  const _CityBarChart({required this.cityMap});
+  final void Function(String cityName)? onCityTap;
+  const _CityBarChart({required this.cityMap, this.onCityTap});
 
   @override
   Widget build(BuildContext context) {
@@ -659,6 +672,16 @@ class _CityBarChart extends StatelessWidget {
                 );
               },
             ),
+            touchCallback: (event, response) {
+              // 点击柱状图 → 跳转到浏览器查看该城市照片
+              if (response != null && response.spot != null &&
+                  event is FlTapUpEvent && onCityTap != null) {
+                final groupIdx = response.spot!.touchedBarGroupIndex;
+                if (groupIdx >= 0 && groupIdx < top.length) {
+                  onCityTap!(top[groupIdx].key);
+                }
+              }
+            },
           ),
         ),
       ),

@@ -64,3 +64,16 @@
 - `timelineBucketsProvider` 监听 `browserRefreshSignalProvider`，使扫描/导入/删除后自动刷新
 - 单文件导入后增量更新索引表（`addMediaToDateIndex()`）
 - `widget_pixel_thumb.dart`: 删除未使用的 `_lastScrolling` 字段
+
+## 地图 & 仪表盘交互优化（2026-06-20）
+
+### 标点点击优先级修复
+- `_handleTapDown` 改为按标点半径从小到大排序，小标点优先响应
+- `_maxScale` 从 8.0 提高到 12.0
+
+### 标点数量 badge
+- 每个标点右上方始终显示红色圆形数量 badge
+
+### 柱状图点击查看照片
+- `_CityBarChart` 新增 `onCityTap` 回调 + `touchCallback`
+- 点击柱体跳转到浏览器页，与地图"查看照片"行为一致
