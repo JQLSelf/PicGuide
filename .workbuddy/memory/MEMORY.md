@@ -59,3 +59,8 @@
 - 扫描完成后自动重建索引；软删除时自动维护
 - 全库对账后也自动重建索引
 - 侧边栏改造为使用 `timelineBucketsProvider` 从索引表加载数据
+
+### 时间轴刷新修复（2026-06-19）
+- `timelineBucketsProvider` 监听 `browserRefreshSignalProvider`，使扫描/导入/删除后自动刷新
+- 单文件导入后增量更新索引表（`addMediaToDateIndex()`）
+- `widget_pixel_thumb.dart`: 删除未使用的 `_lastScrolling` 字段

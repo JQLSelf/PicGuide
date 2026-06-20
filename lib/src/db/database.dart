@@ -532,6 +532,40 @@ class AppDatabase extends _$AppDatabase {
 
   // ── 时间轴索引表操作 ──
 
+  /// 根据媒体项的 EXIF/fileModifiedAt 计算日期 key (YYYY-MM-DD)
+  String _dateKeyForItem(MediaItem item, {ExifData? exif}) {
+    DateTime date;
+    if (exif?.dateTaken != null) {
+      date = exif!.dateTaken!;
+    } else {
+      date = item.fileModifiedAt ?? item.indexedAt ?? DateTime.now();
+    }
+    return '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 增量更新：新增一个媒体项到日期索引表
+  Future<void> addMediaToDateIndex(MediaItem item, {ExifData? exif}) async {
+    final dateKey = _dateKeyForItem(item, exif: exif);
+    await upsertDateIndex(dateKey, delta: 1);
+  }
+
+  /// 增量更新：媒体项日期变化后，更新索引表
+  ///（先减旧日期计数，再加新日期计数）
+  Future<void> updateMediaDateIndex({
+    required MediaItem item,
+    ExifData? oldExif,
+    ExifData? newExif,
+  }) async {
+    final oldKey = _dateKeyForItem(item, exif: oldExif);
+    final newKey = _dateKeyForItem(item, exif: newExif);
+    if (oldKey != newKey) {
+      await upsertDateIndex(oldKey, delta: -1);
+      await upsertDateIndex(newKey, delta: 1);
+    }
+  }
+
   /// 插入或更新日期索引（增量更新 count）
   Future<void> upsertDateIndex(String dateKey, {int delta = 1}) async {
     final existing = await (select(mediaDateIndexes)
