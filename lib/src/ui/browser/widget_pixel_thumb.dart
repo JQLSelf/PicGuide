@@ -123,7 +123,6 @@ class _PixelThumbState extends State<PixelThumb> {
         setState(() => _quality = PixelThumbQuality.thumb);
       }
     }
-    _lastScrolling = scrolling;
   }
 
   void _upgrade() {

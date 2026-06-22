@@ -35,7 +35,7 @@ class _PhotoMapWidgetState extends ConsumerState<PhotoMapWidget> {
   // 交互状态
   double _scale = 3.0; // 默认 3 倍缩放，聚焦江苏省
   double _minScale = 1.0;
-  double _maxScale = 8.0;
+  double _maxScale = 12.0;
   Offset _offset = Offset.zero;
   Offset? _lastFocalPoint;
   bool _isInitialOffsetSet = false;
@@ -144,10 +144,12 @@ class _PhotoMapWidgetState extends ConsumerState<PhotoMapWidget> {
     final tapPos = details.localPosition;
     String? tappedCity;
 
-    // 检查点击了哪个城市标记
-    for (final entry in _cityCenters.entries) {
-      final city = entry.key;
-      final center = entry.value;
+    // 按标点屏幕半径从小到大排序，确保小标点优先被点击到
+    final sortedCities = _cityCenters.keys.toList()
+      ..sort((a, b) => _getMarkerRadius(a).compareTo(_getMarkerRadius(b)));
+
+    for (final city in sortedCities) {
+      final center = _cityCenters[city]!;
       final markerPos = _geoToPixel(center[0], center[1]);
       final dist = (tapPos - markerPos).distance;
       final markerRadius = _getMarkerRadius(city);
@@ -613,6 +615,34 @@ class _ChinaMapPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.0 / (fitScale * scale));
 
+      // ── 数量 badge：始终显示在标点右上方 ──
+      final badgeRadius = baseRadius * 0.55;
+      final badgeX = x + baseRadius * 0.75;
+      final badgeY = y - baseRadius * 0.75;
+      // 白色底圆
+      canvas.drawCircle(Offset(badgeX, badgeY), badgeRadius, Paint()
+        ..color = Colors.white);
+      // 红色填充圆
+      canvas.drawCircle(Offset(badgeX, badgeY), badgeRadius * 0.85, Paint()
+        ..color = const Color(0xFFE74C3C));
+      // 数量文字
+      final badgeFontSize = 9.0 / (fitScale * scale);
+      final countTp = TextPainter(
+        text: TextSpan(
+          text: '$count',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: badgeFontSize,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: ui.TextDirection.ltr,
+        textAlign: TextAlign.center,
+      );
+      countTp.layout();
+      countTp.paint(canvas, Offset(badgeX - countTp.width / 2, badgeY - countTp.height / 2));
+
+      // ── 城市名称标签：选中 或 缩放 > 2.5 时显示 ──
       if (isSelected || scale > 2.5) {
         final fontSize = (isSelected ? 11.0 : 10.0) / (fitScale * scale);
         final tp = TextPainter(

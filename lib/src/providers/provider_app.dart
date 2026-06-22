@@ -124,7 +124,10 @@ final timelineLinkProvider =
 
 /// 时间轴侧边栏桶数据（按月聚合，来自 MediaDateIndexes 表）
 /// 不依赖于 browserMediaProvider，避免全量加载所有媒体项
+/// 监听 browserRefreshSignalProvider，扫描/导入/删除后自动刷新
 final timelineBucketsProvider = FutureProvider<List<MonthlyBucket>>((ref) {
+  // 监听刷新信号：每次信号自增时，此 provider 自动失效并重载
+  ref.watch(browserRefreshSignalProvider);
   return ref.read(databaseProvider).getMonthlyDateBuckets();
 });
 

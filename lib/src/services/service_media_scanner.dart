@@ -348,7 +348,14 @@ class MediaScanner {
     if (!await f.exists()) {
       throw FileSystemException('文件不存在', filePath);
     }
-    return _indexFile(f);
+    final item = await _indexFile(f);
+    // 增量更新时间轴索引表
+    try {
+      await _db.addMediaToDateIndex(item);
+    } catch (e) {
+      debugPrint('⚠️ 更新时间轴索引失败（非致命）: $e');
+    }
+    return item;
   }
 
   // ─────────────────────────────────────────────
