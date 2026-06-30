@@ -1782,8 +1782,16 @@ class $MediaTagsTable extends MediaTags
       requiredDuringInsert: true,
       defaultConstraints: GeneratedColumn.constraintIsAlways(
           'REFERENCES tags (id) ON DELETE CASCADE'));
+  static const VerificationMeta _activeMeta =
+      const VerificationMeta('active');
   @override
-  List<GeneratedColumn> get $columns => [mediaItemId, tagId];
+  late final GeneratedColumn<bool> active = GeneratedColumn<bool>(
+      'active', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(true));
+  @override
+  List<GeneratedColumn> get $columns => [mediaItemId, tagId, active];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1808,6 +1816,12 @@ class $MediaTagsTable extends MediaTags
     } else if (isInserting) {
       context.missing(_tagIdMeta);
     }
+    if (data.containsKey('active')) {
+      context.handle(
+          _activeMeta, active.isAcceptableOrUnknown(data['active']!, _activeMeta));
+    } else if (isInserting) {
+      context.missing(_activeMeta);
+    }
     return context;
   }
 
@@ -1821,6 +1835,8 @@ class $MediaTagsTable extends MediaTags
           .read(DriftSqlType.int, data['${effectivePrefix}media_item_id'])!,
       tagId: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}tag_id'])!,
+      active: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}active'])!,
     );
   }
 
@@ -1833,12 +1849,17 @@ class $MediaTagsTable extends MediaTags
 class MediaTag extends DataClass implements Insertable<MediaTag> {
   final int mediaItemId;
   final int tagId;
-  const MediaTag({required this.mediaItemId, required this.tagId});
+  final bool active;
+  const MediaTag(
+      {required this.mediaItemId, required this.tagId, this.active = true});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['media_item_id'] = Variable<int>(mediaItemId);
     map['tag_id'] = Variable<int>(tagId);
+    if (!nullToAbsent || !active) {
+      map['active'] = Variable<bool>(active);
+    }
     return map;
   }
 
@@ -1846,6 +1867,7 @@ class MediaTag extends DataClass implements Insertable<MediaTag> {
     return MediaTagsCompanion(
       mediaItemId: Value(mediaItemId),
       tagId: Value(tagId),
+      active: Value(active),
     );
   }
 
@@ -1855,6 +1877,7 @@ class MediaTag extends DataClass implements Insertable<MediaTag> {
     return MediaTag(
       mediaItemId: serializer.fromJson<int>(json['mediaItemId']),
       tagId: serializer.fromJson<int>(json['tagId']),
+      active: serializer.fromJson<bool>(json['active']),
     );
   }
   @override
@@ -1863,18 +1886,22 @@ class MediaTag extends DataClass implements Insertable<MediaTag> {
     return <String, dynamic>{
       'mediaItemId': serializer.toJson<int>(mediaItemId),
       'tagId': serializer.toJson<int>(tagId),
+      'active': serializer.toJson<bool>(active),
     };
   }
 
-  MediaTag copyWith({int? mediaItemId, int? tagId}) => MediaTag(
+  MediaTag copyWith({int? mediaItemId, int? tagId, bool? active}) =>
+      MediaTag(
         mediaItemId: mediaItemId ?? this.mediaItemId,
         tagId: tagId ?? this.tagId,
+        active: active ?? this.active,
       );
   MediaTag copyWithCompanion(MediaTagsCompanion data) {
     return MediaTag(
       mediaItemId:
           data.mediaItemId.present ? data.mediaItemId.value : this.mediaItemId,
       tagId: data.tagId.present ? data.tagId.value : this.tagId,
+      active: data.active.present ? data.active.value : this.active,
     );
   }
 
@@ -1882,53 +1909,65 @@ class MediaTag extends DataClass implements Insertable<MediaTag> {
   String toString() {
     return (StringBuffer('MediaTag(')
           ..write('mediaItemId: $mediaItemId, ')
-          ..write('tagId: $tagId')
+          ..write('tagId: $tagId, ')
+          ..write('active: $active')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(mediaItemId, tagId);
+  int get hashCode => Object.hash(mediaItemId, tagId, active);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is MediaTag &&
           other.mediaItemId == this.mediaItemId &&
-          other.tagId == this.tagId);
+          other.tagId == this.tagId &&
+          other.active == this.active);
 }
 
 class MediaTagsCompanion extends UpdateCompanion<MediaTag> {
   final Value<int> mediaItemId;
   final Value<int> tagId;
+  final Value<bool> active;
   final Value<int> rowid;
   const MediaTagsCompanion({
     this.mediaItemId = const Value.absent(),
     this.tagId = const Value.absent(),
+    this.active = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MediaTagsCompanion.insert({
     required int mediaItemId,
     required int tagId,
+    bool active = true,
     this.rowid = const Value.absent(),
   })  : mediaItemId = Value(mediaItemId),
-        tagId = Value(tagId);
+        tagId = Value(tagId),
+        active = Value(active);
   static Insertable<MediaTag> custom({
     Expression<int>? mediaItemId,
     Expression<int>? tagId,
+    Expression<bool>? active,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
       if (mediaItemId != null) 'media_item_id': mediaItemId,
       if (tagId != null) 'tag_id': tagId,
+      if (active != null) 'active': active,
       if (rowid != null) 'rowid': rowid,
     });
   }
 
   MediaTagsCompanion copyWith(
-      {Value<int>? mediaItemId, Value<int>? tagId, Value<int>? rowid}) {
+      {Value<int>? mediaItemId,
+      Value<int>? tagId,
+      Value<bool>? active,
+      Value<int>? rowid}) {
     return MediaTagsCompanion(
       mediaItemId: mediaItemId ?? this.mediaItemId,
       tagId: tagId ?? this.tagId,
+      active: active ?? this.active,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1942,6 +1981,9 @@ class MediaTagsCompanion extends UpdateCompanion<MediaTag> {
     if (tagId.present) {
       map['tag_id'] = Variable<int>(tagId.value);
     }
+    if (active.present) {
+      map['active'] = Variable<bool>(active.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1953,6 +1995,7 @@ class MediaTagsCompanion extends UpdateCompanion<MediaTag> {
     return (StringBuffer('MediaTagsCompanion(')
           ..write('mediaItemId: $mediaItemId, ')
           ..write('tagId: $tagId, ')
+          ..write('active: $active, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();

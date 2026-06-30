@@ -86,12 +86,14 @@ extension TagColorHex on Tag {
 }
 
 /// 媒体-标签关联表（多对多）
+/// active：用于软删除时标记为 false，不参与统计；MD5 匹配重新导入时恢复为 true
 @DataClassName('MediaTag')
 class MediaTags extends Table {
   IntColumn get mediaItemId =>
       integer().references(MediaItems, #id, onDelete: KeyAction.cascade)();
   IntColumn get tagId =>
       integer().references(Tags, #id, onDelete: KeyAction.cascade)();
+  BoolColumn get active => boolean().withDefault(const Constant(true))();
 
   @override
   Set<Column> get primaryKey => {mediaItemId, tagId};
@@ -142,7 +144,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -164,6 +166,10 @@ class AppDatabase extends _$AppDatabase {
           // v3 -> v4: 增 mediaDateIndexes 时间轴索引表
           if (from < 4) {
             await m.createTable(mediaDateIndexes);
+          }
+          // v4 -> v5: 增 mediaTags.active 列
+          if (from < 5) {
+            await m.addColumn(mediaTags, mediaTags.active);
           }
         },
       );
@@ -352,8 +358,12 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// 获取指定文件夹的直接子目录及其文件计数
+  /// 注意：即使直系子目录本身没有文件，只要其子树内有文件，也会包含在内
   Future<List<SubFolderEntry>> getSubFolders(String parentPath) async {
     final normParent = parentPath.replaceAll('/', '\\');
+    final prefix = normParent.isEmpty
+        ? ''
+        : (normParent.endsWith('\\') ? normParent : '$normParent\\');
     final rows = await (select(mediaItems)
           ..where((t) => t.isDeleted.equals(false)))
         .get();
@@ -362,11 +372,23 @@ class AppDatabase extends _$AppDatabase {
       // 统一使用反斜杠处理路径
       final normPath = r.filePath.replaceAll('/', '\\');
       final dir = p.dirname(normPath);
-      final dirParent = p.dirname(dir);
-      // dirParent 必须等于 normParent 才是直接子目录
-      if (dirParent == normParent && dir != normParent) {
-        subMap[dir] = (subMap[dir] ?? 0) + 1;
-      }
+
+      // 跳过当前目录自身或无关联路径
+      if (dir == normParent || !dir.startsWith(prefix)) continue;
+
+      // 提取 normParent 的直系子目录
+      // 例如 D:\XiaomiThemeEdit\deep\img.jpg → 直系子目录为 XiaomiThemeEdit
+      final relative = dir.substring(prefix.length);
+      final firstSep = relative.indexOf('\\');
+      final childName =
+          firstSep == -1 ? relative : relative.substring(0, firstSep);
+      final childPath = normParent.isEmpty
+          ? childName
+          : (normParent.endsWith('\\')
+              ? '$normParent$childName'
+              : '$normParent\\$childName');
+
+      subMap[childPath] = (subMap[childPath] ?? 0) + 1;
     }
     return subMap.entries
         .map((e) => SubFolderEntry(
@@ -394,9 +416,10 @@ class AppDatabase extends _$AppDatabase {
         .get();
     final exifMap = {for (final e in exifRows) e.mediaItemId: e};
 
-    // 批量加载媒体-标签关联
+    // 批量加载媒体-标签关联（仅活跃的关联）
     final mtRows = await (select(mediaTags)
-          ..where((mt) => mt.mediaItemId.isIn(ids)))
+          ..where((mt) => mt.mediaItemId.isIn(ids))
+          ..where((mt) => mt.active.equals(true)))
         .get();
     final tagIdSet = mtRows.map((r) => r.tagId).toSet();
 
@@ -424,10 +447,11 @@ class AppDatabase extends _$AppDatabase {
         )).toList();
   }
 
-  /// 按标签筛选
+  /// 按标签筛选（仅活跃关联）
   Future<List<MediaItem>> getItemsByTag(int tagId) async {
     final taggedIds = await (select(mediaTags)
-          ..where((mt) => mt.tagId.equals(tagId)))
+          ..where((mt) => mt.tagId.equals(tagId))
+          ..where((mt) => mt.active.equals(true)))
         .get()
         .then((rows) => rows.map((r) => r.mediaItemId).toList());
     if (taggedIds.isEmpty) return [];
@@ -515,6 +539,13 @@ class AppDatabase extends _$AppDatabase {
           ..where((mt) => mt.mediaItemId.isIn(mediaIds))
           ..where((mt) => mt.tagId.equals(tagId)))
         .go();
+  }
+
+  /// 重新激活某媒体的所有标签关联（软删恢复时用）
+  Future<void> reactivateMediaTags(int mediaId) async {
+    await (update(mediaTags)
+          ..where((t) => t.mediaItemId.equals(mediaId)))
+        .write(const MediaTagsCompanion(active: Value(true)));
   }
 
   Future<List<Tag>> getAllTags() => select(tags).get();
@@ -738,7 +769,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// 软删除：把 isDeleted 置为 true
-  /// 同时维护时间轴索引表
+  /// 同时维护时间轴索引表，并将关联标签标记为不活跃
   Future<void> softDeleteMedia(List<int> ids) async {
     if (ids.isEmpty) return;
 
@@ -748,6 +779,10 @@ class AppDatabase extends _$AppDatabase {
     // 2. 执行软删除
     await (update(mediaItems)..where((t) => t.id.isIn(ids)))
         .write(const MediaItemsCompanion(isDeleted: Value(true)));
+
+    // 3. 将关联标签标记为不活跃（保留关联关系，仅不参与统计）
+    await (update(mediaTags)..where((t) => t.mediaItemId.isIn(ids)))
+        .write(const MediaTagsCompanion(active: Value(false)));
   }
 
   /// 标记文件夹下"在磁盘上已不存在"的记录
@@ -894,7 +929,7 @@ class AppDatabase extends _$AppDatabase {
   Future<List<TagCloudItem>> getTagCloud() async {
     final allTags = await select(tags).get();
     return Future.wait(allTags.map((t) async {
-      // 排除关联到软删媒体的标签计数
+      // 排除关联到软删媒体或已被标记为不活跃的标签计数
       final count = await (select(mediaTags).join([
         innerJoin(
           mediaItems,
@@ -902,6 +937,7 @@ class AppDatabase extends _$AppDatabase {
         )
       ])
             ..where(mediaTags.tagId.equals(t.id))
+            ..where(mediaTags.active.equals(true))
             ..where(mediaItems.isDeleted.equals(false)))
           .get()
           .then((r) => r.length);

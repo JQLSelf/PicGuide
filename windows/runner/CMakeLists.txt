@@ -38,3 +38,11 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# === native_media.dll (Rust FFI) ===
+# 每次编译后自动复制 DLL 到 exe 同目录
+set(NATIVE_DLL_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../native/target/$<CONFIG>/native_media.dll")
+add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NATIVE_DLL_SRC}" "$<TARGET_FILE_DIR:${BINARY_NAME}>/native_media.dll"
+  COMMENT "Copying native_media.dll to output directory"
+)

@@ -77,3 +77,11 @@
 ### 柱状图点击查看照片
 - `_CityBarChart` 新增 `onCityTap` 回调 + `touchCallback`
 - 点击柱体跳转到浏览器页，与地图"查看照片"行为一致
+
+## Rust FFI 迁移方案（2026-06-29）
+
+- 仅针对 Windows 桌面端，移动端保持 Dart 实现不变
+- 抽象层 `native_bridge.dart` + `dart.library.io` 条件导入，编译期自动选 Rust 或 Dart
+- Dart 实现全部保留（`helper_md5.dart`、`service_exif_reader.dart`、`_computeFileMeta` 等）作为非 Windows 兜底
+- `batch.rs` 用 `rayon::par_iter()` 自动管理线程池（work-stealing），无需手动调并发
+- 推进顺序：abstract layer → decoder → exif → hasher

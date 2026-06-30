@@ -348,7 +348,10 @@ class _ScanProgressPanelState extends State<ScanProgressPanel> {
                 hasScanned
                     ? '当前已扫描 ${widget.controller.scannedCount} 个文件。'
                     : '扫描尚未开始。',
-                style: const TextStyle(fontSize: 13, color: Colors.grey),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? Colors.white60 : Colors.grey,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
@@ -376,11 +379,11 @@ class _ScanProgressPanelState extends State<ScanProgressPanel> {
               if (hasScanned)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text(
+                  child:                   Text(
                     '已扫描的内容会自动保存到数据库',
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.grey[500],
+                      color: isDark ? Colors.white38 : Colors.grey[500],
                     ),
                   ),
                 ),

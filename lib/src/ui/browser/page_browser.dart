@@ -1056,7 +1056,7 @@ class _ModeSidebar extends ConsumerWidget {
           Divider(height: 1, color: isDark ? Colors.white12 : null),
           Expanded(
             child: switch (mode) {
-              BrowserMode.timeline => const _TimelineHint(),
+              BrowserMode.timeline => const _TimelineBucketList(),
               BrowserMode.folder => const _FolderTreeView(),
               BrowserMode.tag => const _TagList(),
             },
@@ -2045,20 +2045,409 @@ class _SortMenuItem extends StatelessWidget {
   }
 }
 
-class _TimelineHint extends StatelessWidget {
-  const _TimelineHint();
+class _TimelineBucketList extends ConsumerStatefulWidget {
+  const _TimelineBucketList();
+  @override
+  ConsumerState<_TimelineBucketList> createState() =>
+      _TimelineBucketListState();
+}
+
+enum _TimelineViewMode { list, calendar }
+
+class _TimelineBucketListState extends ConsumerState<_TimelineBucketList> {
+  _TimelineViewMode _view = _TimelineViewMode.list;
+  int _calYear = 0;
+  int _calMonth = 0;
+
+  // 缓存每日索引数据
+  Map<String, int> _dailyCounts = {};
+  bool _dailyLoaded = false;
+
+  Future<void> _loadDailyIndexes() async {
+    if (_dailyLoaded) return;
+    final db = ref.read(databaseProvider);
+    final indexes = await db.getDateIndexes();
+    if (!mounted) return;
+    setState(() {
+      _dailyCounts = {for (final idx in indexes) idx.dateKey: idx.count};
+      _dailyLoaded = true;
+    });
+  }
+
+  void _onBucketTap(String bucket) {
+    ref.read(activeTimelineBucketProvider.notifier).state = bucket;
+    final link = ref.read(timelineLinkProvider);
+
+    final ctx = link.bucketKeys[bucket]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          duration: const Duration(milliseconds: 300), alignment: 0.1);
+      return;
+    }
+
+    final scroll = link.scrollController;
+    if (scroll == null || !scroll.hasClients) return;
+    final total = link.totalItemCount;
+    final firstIdx = link.bucketFirstIndex[bucket];
+    if (total == 0 || firstIdx == null) return;
+    final pos = scroll.position;
+    final avgItemH = pos.maxScrollExtent > 0 && pos.maxScrollExtent.isFinite
+        ? (pos.maxScrollExtent / total).clamp(60.0, 600.0)
+        : 200.0;
+    final target = (firstIdx * avgItemH).clamp(0.0, pos.maxScrollExtent);
+    scroll.jumpTo(target);
+
+    int retries = 0;
+    void tryPrecise(Duration _) {
+      if (!mounted) return;
+      final newCtx =
+          ref.read(timelineLinkProvider).bucketKeys[bucket]?.currentContext;
+      if (newCtx != null) {
+        Scrollable.ensureVisible(newCtx,
+            duration: const Duration(milliseconds: 300), alignment: 0.1);
+        return;
+      }
+      if (++retries < 5) {
+        WidgetsBinding.instance.addPostFrameCallback(tryPrecise);
+      }
+    }
+    WidgetsBinding.instance.addPostFrameCallback(tryPrecise);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bucketsAsync = ref.watch(timelineBucketsProvider);
+    final activeBucket = ref.watch(activeTimelineBucketProvider);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Column(
+      children: [
+        // ── 模式切换按钮 ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            children: [
+              const Spacer(),
+              _ViewToggle(
+                view: _view,
+                onChanged: (v) {
+                  setState(() => _view = v);
+                  if (v == _TimelineViewMode.calendar) {
+                    _loadDailyIndexes();
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        // ── 内容 ──
+        Expanded(
+          child: bucketsAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            error: (e, _) => Center(
+              child: Text('$e', style: TextStyle(
+                  fontSize: 12, color: isDark ? Colors.white54 : Colors.grey)),
+            ),
+            data: (buckets) {
+              if (buckets.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    '暂无数据\n\n点击右上角导入文件夹开始整理。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.white54
+                          : Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                );
+              }
+              if (_view == _TimelineViewMode.calendar) {
+                return _buildCalendar(buckets, activeBucket);
+              }
+              return _buildList(buckets, activeBucket, isDark);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildList(List<MonthlyBucket> buckets, String? activeBucket, bool isDark) {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: buckets.length,
+      itemBuilder: (_, i) {
+        final bucket = buckets[i];
+        final selected = bucket.dateKey == activeBucket;
+        return InkWell(
+          onTap: () => _onBucketTap(bucket.dateKey),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            decoration: BoxDecoration(
+              color: selected
+                  ? Theme.of(context).colorScheme.primary.withOpacity(0.12)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  bucket.dateKey,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    color: selected ? Theme.of(context).colorScheme.primary : null,
+                  ),
+                ),
+                Text('${bucket.count} 张',
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: isDark ? Colors.white54 : Colors.grey)),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCalendar(List<MonthlyBucket> buckets, String? activeBucket) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // 取最新月份为默认
+    if (_calYear == 0 && buckets.isNotEmpty) {
+      final latest = buckets.first.dateKey; // "YYYY-MM"
+      final parts = latest.split('-');
+      _calYear = int.parse(parts[0]);
+      _calMonth = int.parse(parts[1]);
+    }
+
+    final monthKey = '$_calYear-${_calMonth.toString().padLeft(2, '0')}';
+    final monthBucket = buckets.where((b) => b.dateKey == monthKey).firstOrNull;
+
+    // 当月每日计数
+    final prefix = '$monthKey-';
+    final dailyInMonth = _dailyCounts.entries
+        .where((e) => e.key.startsWith(prefix))
+        .map((e) => MapEntry(e.key.substring(prefix.length), e.value))
+        .toList();
+
+    return Column(
+      children: [
+        // ── 月份导航 ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.chevron_left, size: 18),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onPressed: () {
+                  setState(() {
+                    _calMonth--;
+                    if (_calMonth < 1) { _calMonth = 12; _calYear--; }
+                  });
+                },
+              ),
+              Expanded(
+                child: Text(
+                  '$monthKey · ${monthBucket?.count ?? 0}张',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.chevron_right, size: 18),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onPressed: () {
+                  setState(() {
+                    _calMonth++;
+                    if (_calMonth > 12) { _calMonth = 1; _calYear++; }
+                  });
+                  if (_calYear * 12 + _calMonth > DateTime.now().year * 12 + DateTime.now().month) {
+                    _calMonth = DateTime.now().month;
+                    _calYear = DateTime.now().year;
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        // ── 星期表头 ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            children: '一二三四五六日'
+                .split('')
+                .map((d) => Expanded(
+                      child: Text(d,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: isDark ? Colors.white54 : Colors.grey)),
+                    ))
+                .toList(),
+          ),
+        ),
+        const SizedBox(height: 2),
+        // ── 日历网格 ──
+        Expanded(
+          child: _buildCalendarGrid(monthKey, isDark, dailyInMonth),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCalendarGrid(
+      String monthKey, bool isDark, List<MapEntry<String, int>> dailyInMonth) {
+    final dayCount = {for (final e in dailyInMonth) e.key: e.value};
+    final daysInMonth = _daysInMonth(_calYear, _calMonth);
+    final firstWeekday = DateTime(_calYear, _calMonth, 1).weekday; // 1=mon...7=sun
+    // 转为周日为 7 的模式
+    final startCol = firstWeekday == 7 ? 0 : firstWeekday; // mon=1 → col=1, sun=0
+
+    // 最多 6 行
+    final cells = <Widget>[];
+    // 空白填充
+    for (int c = 0; c < startCol; c++) {
+      cells.add(const SizedBox.shrink());
+    }
+    for (int d = 1; d <= daysInMonth; d++) {
+      final dayStr = d.toString().padLeft(2, '0');
+      final count = dayCount[dayStr];
+      cells.add(_CalendarDay(
+        day: d,
+        count: count,
+        isDark: isDark,
+        onTap: count != null ? () => _onBucketTap(monthKey) : null,
+      ));
+    }
+
+    // 填充剩余空
+    final total = (cells.length / 7).ceil() * 7;
+    while (cells.length < total) {
+      cells.add(const SizedBox.shrink());
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: GridView.count(
+        crossAxisCount: 7,
+        childAspectRatio: 1.0,
+        physics: const NeverScrollableScrollPhysics(),
+        shrinkWrap: true,
+        children: cells,
+      ),
+    );
+  }
+
+  int _daysInMonth(int y, int m) {
+    if (m == 2) {
+      if (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) return 29;
+      return 28;
+    }
+    if ([4, 6, 9, 11].contains(m)) return 30;
+    return 31;
+  }
+}
+
+/// 日历日格子
+class _CalendarDay extends StatelessWidget {
+  final int day;
+  final int? count;
+  final bool isDark;
+  final VoidCallback? onTap;
+
+  const _CalendarDay({
+    required this.day,
+    this.count,
+    required this.isDark,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhotos = count != null && count! > 0;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.all(1),
+        decoration: BoxDecoration(
+          color: hasPhotos
+              ? Theme.of(context).colorScheme.primary.withOpacity(0.08)
+              : null,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '$day',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: hasPhotos ? FontWeight.w500 : FontWeight.w400,
+                color: hasPhotos
+                    ? Theme.of(context).colorScheme.primary
+                    : (isDark ? Colors.white60 : Colors.black54),
+              ),
+            ),
+            if (hasPhotos)
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 8,
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.7),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 列表/日历切换按钮
+class _ViewToggle extends StatelessWidget {
+  final _TimelineViewMode view;
+  final ValueChanged<_TimelineViewMode> onChanged;
+
+  const _ViewToggle({required this.view, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Text(
-        '时间轴视图：显示所有已归档的文件，按归档时间倒序。\n\n点击右上角"导入文件夹"或"导入单文件"开始整理。',
-        style: TextStyle(
-          fontSize: 12,
-          color:
-              isDark ? Colors.white54 : Theme.of(context).colorScheme.outline,
+    final color = isDark ? Colors.white60 : Colors.grey;
+    final activeColor = Theme.of(context).colorScheme.primary;
+    return SizedBox(
+      width: 52,
+      height: 24,
+      child: GestureDetector(
+        onTap: () => onChanged(
+            view == _TimelineViewMode.list
+                ? _TimelineViewMode.calendar
+                : _TimelineViewMode.list),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF2A2B3D) : Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Icon(Icons.list, size: 12,
+                    color: view == _TimelineViewMode.list ? activeColor : color),
+              ),
+              Expanded(
+                child: Icon(Icons.calendar_month, size: 12,
+                    color: view == _TimelineViewMode.calendar ? activeColor : color),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3768,133 +4157,15 @@ class _TimelineScaffoldState extends ConsumerState<_TimelineScaffold> {
     );
   }
 
-  /// 从 MonthlyBucket 列表构建侧边栏 UI
+  /// 从 MonthlyBucket 列表构建侧边栏 UI（已废弃，由左侧 _TimelineBucketList 替代）
   Widget _buildSidebar(List<MonthlyBucket> buckets, String? activeBucket) {
-    return Container(
-      width: 110,
-      decoration: BoxDecoration(
-        border:
-            Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-      ),
-      child: Scrollbar(
-        controller: _sidebarScroll,
-        thumbVisibility: true,
-        child: ListView.builder(
-          controller: _sidebarScroll,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: buckets.length,
-          itemBuilder: (_, i) {
-            final bucket = buckets[i];
-            final selected = bucket.dateKey == activeBucket;
-            return InkWell(
-              onTap: () => _onBucketTap(bucket.dateKey),
-              child: Container(
-                margin: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 2),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 8),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withOpacity(0.12)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      bucket.dateKey,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                        color: selected
-                            ? Theme.of(context).colorScheme.primary
-                            : null,
-                      ),
-                    ),
-                    Text(
-                      '${bucket.count} 张',
-                      style: const TextStyle(
-                          fontSize: 10, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
-  /// 从 Map 构建侧边栏 UI（回退路径）
+  /// 从 Map 构建侧边栏 UI（回退路径，已废弃）
   Widget _buildSidebarFromMap(
       List<String> bucketList, Map<String, int> buckets, String? activeBucket) {
-    return Container(
-      width: 110,
-      decoration: BoxDecoration(
-        border:
-            Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-      ),
-      child: Scrollbar(
-        controller: _sidebarScroll,
-        thumbVisibility: true,
-        child: ListView.builder(
-          controller: _sidebarScroll,
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: bucketList.length,
-          itemBuilder: (_, i) {
-            final key = bucketList[i];
-            final selected = key == activeBucket;
-            return InkWell(
-              onTap: () => _onBucketTap(key),
-              child: Container(
-                margin: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 2),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 8),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withOpacity(0.12)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      key,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                        color: selected
-                            ? Theme.of(context).colorScheme.primary
-                            : null,
-                      ),
-                    ),
-                    Text(
-                      '${buckets[key]} 张',
-                      style: const TextStyle(
-                          fontSize: 10, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   /// 点击 bucket 时的处理（两阶段跳转，解决 GridView lazy build 导致

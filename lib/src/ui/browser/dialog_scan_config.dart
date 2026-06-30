@@ -33,6 +33,8 @@ class ScanConfigDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    final isDark = theme.brightness == Brightness.dark;
+
     return AlertDialog(
       title: const Text('确认扫描'),
       contentPadding: const EdgeInsets.all(20),
@@ -42,25 +44,33 @@ class ScanConfigDialog extends StatelessWidget {
         children: [
           Text(
             '即将扫描以下文件夹中的所有图片：',
-            style: TextStyle(fontSize: 13, color: theme.hintColor),
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.white70 : theme.hintColor,
+            ),
           ),
           const SizedBox(height: 12),
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: theme.primaryColor.withAlpha(20),
+              color: isDark
+                  ? Colors.white.withAlpha(8)
+                  : theme.primaryColor.withAlpha(20),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               children: [
-                const Icon(Icons.folder_open, size: 16),
+                Icon(Icons.folder_open, size: 16,
+                    color: isDark ? Colors.white70 : theme.primaryColor),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     folderPath,
-                    style:
-                        TextStyle(fontSize: 12, color: theme.primaryColor),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.white70 : theme.primaryColor,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -70,7 +80,10 @@ class ScanConfigDialog extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             '扫描使用多核并行计算，自动适配 CPU 核心数。',
-            style: TextStyle(fontSize: 12, color: theme.hintColor),
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? Colors.white60 : theme.hintColor,
+            ),
           ),
         ],
       ),

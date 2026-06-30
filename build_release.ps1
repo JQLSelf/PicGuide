@@ -210,15 +210,41 @@ Write-OK "输出目录: $outputAbsDir"
 
 # ────────── 1. flutter pub get ──────────
 
-Write-Section "1/5  拉取依赖"
+Write-Section "1/6  拉取依赖"
 & $FlutterExe pub get
 if ($LASTEXITCODE -ne 0) { throw "flutter pub get 失败" }
 Write-OK "依赖已更新"
 
-# ────────── 2. flutter build windows ──────────
+# ────────── 2. 编译 Rust native_media.dll ──────────
+
+Write-Section "2/6  编译 Rust 原生库"
+$nativeDir = Join-Path $projectRoot "native"
+$rustTargetDll = Join-Path $nativeDir "target\Release\native_media.dll"
+
+# 检查 Rust 工具链
+$cargo = Get-Command cargo -ErrorAction SilentlyContinue
+if (-not $cargo) {
+    throw "未找到 cargo，请先安装 Rust：https://rustup.rs"
+}
+Write-OK "Rust 工具链: $((& cargo --version 2>&1).ToString().Trim())"
+
+Push-Location $nativeDir
+try {
+    & cargo build --release
+    if ($LASTEXITCODE -ne 0) { throw "cargo build --release 失败" }
+} finally {
+    Pop-Location
+}
+
+if (-not (Test-Path $rustTargetDll)) {
+    throw "未找到 $rustTargetDll，Rust 编译可能未成功"
+}
+Write-OK "Rust 原生库: $rustTargetDll ($((Get-Item $rustTargetDll).Length/1KB -as [int]) KB)"
+
+# ────────── 3. flutter build windows ──────────
 
 if (-not $SkipBuild) {
-    Write-Section "2/5  编译 Release"
+    Write-Section "3/6  编译 Release"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     # 清理上次产物（避免旧 dll 残留）
@@ -234,7 +260,7 @@ if (-not $SkipBuild) {
     $sw.Stop()
     Write-OK "构建完成，耗时 $([math]::Round($sw.Elapsed.TotalSeconds, 1)) s"
 } else {
-    Write-Section "2/5  编译 Release（跳过 -SkipBuild）"
+    Write-Section "3/6  编译 Release（跳过 -SkipBuild）"
     if (-not (Test-Path $releaseDir)) {
         throw "未找到 $releaseDir，请先去掉 -SkipBuild 执行一次完整构建"
     }
@@ -247,9 +273,9 @@ if (-not (Test-Path (Join-Path $releaseDir "pixelvault.exe"))) {
 }
 Write-OK "主程序: $releaseDir\pixelvault.exe"
 
-# ────────── 3. 拷贝 USER_MANUAL.md ──────────
+# ────────── 4. 拷贝 USER_MANUAL.md ──────────
 
-Write-Section "3/5  拷贝使用手册到 Release 目录"
+Write-Section "4/6  拷贝使用手册到 Release 目录"
 $manualSrc = Join-Path $projectRoot "assets\USER_MANUAL.md"
 $manualDst = Join-Path $releaseDir "USER_MANUAL.md"
 if (Test-Path $manualSrc) {
@@ -259,10 +285,10 @@ if (Test-Path $manualSrc) {
     Write-Warn "未找到 $manualSrc，跳过（应用启动时也会自动生成）"
 }
 
-# ────────── 4. 生成绿色版 zip ──────────
+# ────────── 5. 生成绿色版 zip ──────────
 
 if (-not $SkipZip) {
-    Write-Section "4/5  打包绿色版 zip"
+    Write-Section "5/6  打包绿色版 zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -287,10 +313,10 @@ if (-not $SkipZip) {
     Write-Host "       $hash" -ForegroundColor DarkGray
 }
 
-# ────────── 5. Inno Setup 安装程序 ──────────
+# ────────── 6. Inno Setup 安装程序 ──────────
 
 if ($useInnoSetup) {
-    Write-Section "5/5  生成 Inno Setup 安装程序"
+    Write-Section "6/6  生成 Inno Setup 安装程序"
 
     # 生成临时 .iss（也可让用户自建固定模板）
     $issContent = @"
@@ -353,7 +379,7 @@ Filename: "{app}\pixelvault.exe"; Description: "{cm:LaunchProgram,PixelVault}"; 
         Write-Warn "未找到安装程序，Inno Setup 可能输出了非预期位置"
     }
 } else {
-    Write-Section "5/5  Inno Setup 安装程序（跳过）"
+    Write-Section "6/6  Inno Setup 安装程序（跳过）"
 }
 
 # ────────── 汇总 ──────────

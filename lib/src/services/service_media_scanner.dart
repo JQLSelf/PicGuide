@@ -18,6 +18,7 @@ import 'helper_md5.dart';
 import 'service_region_resolver.dart';
 import 'helper_path.dart';
 import 'service_scan_controller.dart';
+import 'native_bridge.dart';
 
 const _imageExts = {
   '.jpg',
@@ -171,6 +172,26 @@ Future<_FileMetaResult> _computeFileMeta(String filePath) async {
   );
 }
 
+/// 在独立 Isolate 中批量处理文件（MD5 + EXIF）
+/// 通过 native_bridge 调用 Rust FFI 或 Dart 兜底，不阻塞主 Isolate。
+Future<List<_FileMetaResult>> _processBatchInIsolate(List<String> paths) async {
+  try {
+    final results = await processFileBatch(paths: paths);
+    return results.map((r) => _FileMetaResult(
+      filePath: r.filePath,
+      md5hash: r.md5hash,
+      exifAttrs: r.exifAttrs,
+      fileSize: r.fileSize,
+      fileModified: r.fileModified,
+    )).toList();
+  } catch (_) {
+    // 兜底：逐个文件用 Isolate
+    return Future.wait(
+      paths.map((p) => _computeFileMeta(p)),
+    );
+  }
+}
+
 // ─────────────────────────────────────────────
 // MediaScanner
 // ─────────────────────────────────────────────
@@ -257,10 +278,20 @@ class MediaScanner {
       final batchEnd = (i + concurrency).clamp(0, files.length);
       final batch = files.sublist(i, batchEnd);
 
-      // Phase 1: 在 Isolate 中并行计算 MD5 + EXIF（CPU 密集）
-      final metaFutures =
-          batch.map((file) => compute(_computeFileMeta, file.path)).toList();
-      final metaResults = await Future.wait(metaFutures);
+      // Phase 1: 批量计算 MD5 + EXIF（Isolate 中避免阻塞 UI）
+      List<_FileMetaResult> metaResults;
+      try {
+        // processFileBatch 在 Isolate 中执行：
+        // - Windows: 内部调 Rust rayon（后台线程池，不阻塞 Flutter 事件循环）
+        // - 其他平台: 走 stub 的 Dart 顺序计算（也在 Isolate 中）
+        metaResults = await compute(_processBatchInIsolate,
+            batch.map((f) => f.path).toList());
+      } catch (_) {
+        // Fallback: 如果 Rust FFI 或 bridge 失败，用原来的独立 Isolate 方案
+        final metaFutures =
+            batch.map((file) => compute(_computeFileMeta, file.path)).toList();
+        metaResults = await Future.wait(metaFutures);
+      }
 
       // Phase 2: 主 isolate 处理数据库操作 + GPS 反查（I/O 密集）
       for (var j = 0; j < batch.length; j++) {
@@ -419,6 +450,9 @@ class MediaScanner {
             isDeleted: const Value(false),
             isMissing: const Value(false),
           ));
+
+      // 重新激活该媒体的标签关联（软删恢复时用到）
+      await _db.reactivateMediaTags(existing.id);
 
       if (controller?.shouldStop() ?? false) {
         throw StateError('扫描已停止');
@@ -762,6 +796,23 @@ class MediaScanner {
       final thumbPath =
           PathHelper.instance.generateThumbnailPath(mediaId, '.jpg');
 
+      // ─── Rust FFI 快速通道（仅 Windows）───
+      try {
+        final result = await makeThumbnail(
+          path: file.path,
+          maxW: maxWidth,
+          maxH: maxHeight,
+          quality: quality,
+        );
+        if (result != null) {
+          await File(thumbPath).writeAsBytes(result.jpegBytes);
+          return thumbPath;
+        }
+      } catch (_) {
+        // Rust FFI 不可用（非 Windows 或 DLL 加载失败），走 Dart 兜底
+      }
+
+      // ─── Dart 兜底：Isolate 解码 + package:image 缩放/编码 ───
       final bytes = await file.readAsBytes();
       final image = await compute(_decodeImageIsolate, bytes);
       if (image == null) return null;

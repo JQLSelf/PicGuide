@@ -4,6 +4,7 @@
 // 支持白天/黑夜模式自适应
 // ============================================================
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -15,9 +16,21 @@ import 'src/db/database.dart';
 import 'src/providers/provider_database.dart';
 import 'src/services/service_manual.dart';
 import 'src/services/service_scan_controller.dart';
+import 'src/services/native_bridge.dart' show nativeVersion, disposeNative;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ─── Rust FFI 验证（Phase 0.5，仅 Windows）───
+  if (Platform.isWindows) {
+    try {
+      // nativeVersion() 内部自动调用 RustLib.init()
+      final ver = await nativeVersion();
+      debugPrint('🦀 Rust FFI loaded: $ver');
+    } catch (e) {
+      debugPrint('⚠️ Rust FFI unavailable: $e');
+    }
+  }
 
   // 桌面端窗口管理初始化（仅用于拦截关闭事件）
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -277,8 +290,6 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
   int _lastRefreshSignal = 0;
   bool _isExiting = false;
   late AnimationController _exitAnimationController;
-  late Animation<double> _exitOpacity;
-  late Animation<double> _exitScale;
 
   static const List<({IconData icon, IconData selectedIcon, String label})>
       _navItems = [
@@ -303,12 +314,6 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
     _exitAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
-    );
-    _exitOpacity = Tween<double>(begin: 1.0, end: 0.0).animate(
-      CurvedAnimation(parent: _exitAnimationController, curve: Curves.easeInOut),
-    );
-    _exitScale = Tween<double>(begin: 1.0, end: 0.95).animate(
-      CurvedAnimation(parent: _exitAnimationController, curve: Curves.easeInOut),
     );
   }
 
@@ -351,46 +356,74 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
     );
 
     if (confirmed == true) {
-      _isExiting = true;
+      final t0 = DateTime.now();
+      debugPrint('[exit] 用户确认退出');
 
+      // 立即停止扫描
       if (isScanning && scanController != null) {
         scanController.confirmStop();
         await for (final state in scanController.stateStream) {
-          if (state == ScanState.stopped) {
-            break;
-          }
+          if (state == ScanState.stopped) break;
         }
+        debugPrint('[exit] 扫描已停止 (${DateTime.now().difference(t0).inMilliseconds}ms)');
       }
 
-      await Future.wait([
-        _cleanupResources(scanController),
-        _playExitAnimation(),
-      ]);
+      // 立即重建 UI：移除 BrowserPage，显示退出 spinner
+      setState(() => _isExiting = true);
+      await Future.delayed(const Duration(milliseconds: 50));
+      debugPrint('[exit] setState 完成 (${DateTime.now().difference(t0).inMilliseconds}ms)');
 
-      // 让 loading 动画至少展示约 1s，解决 destroy 过程阻塞主线程
-      // 导致 spinner 卡死的视觉问题。
-      await Future.delayed(const Duration(milliseconds: 600));
+      // 清理资源（带超时，保证不会卡住）
+      await _cleanupAsync(scanController).timeout(
+        const Duration(seconds: 1),
+        onTimeout: () {
+          debugPrint('[exit] 清理超时，继续退出');
+          return null;
+        },
+      );
+      debugPrint('[exit] 清理完成 (${DateTime.now().difference(t0).inMilliseconds}ms)');
 
+      // 关闭窗口
       await windowManager.destroy();
+      debugPrint('[exit] destroy 完成 (${DateTime.now().difference(t0).inMilliseconds}ms)');
+
+      // 强制退出进程，绕过 Windows 原生层 teardown 卡顿
+      debugPrint('[exit] 调用 exit(0) 结束进程');
+      exit(0);
     }
   }
 
-  Future<void> _cleanupResources(ScanController? scanController) async {
+  Future<void> _cleanupAsync(ScanController? scanController) async {
+    // 扫描控制器
+    scanController?.dispose();
+
+    // ImageCache — 已在 BrowserPage dispose 时大量释放，
+    // 这里只做兜底清理
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+
+    // 数据库 — 最多等 500ms，避免被 SQLite 关闭卡住
+    final db = ref.read(databaseProvider);
     try {
-      scanController?.dispose();
-
-      PaintingBinding.instance.imageCache.clear();
-      PaintingBinding.instance.imageCache.clearLiveImages();
-
-      final db = ref.read(databaseProvider);
-      await db.close();
+      await db.close().timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {
+          debugPrint('[exit] db.close 超时');
+          return null;
+        },
+      );
     } catch (e) {
-      debugPrint('资源清理失败: $e');
+      debugPrint('[exit] db.close error: $e');
     }
-  }
 
-  Future<void> _playExitAnimation() async {
-    await _exitAnimationController.forward();
+    // Rust FFI 原生库释放（Windows 桌面端）
+    if (Platform.isWindows) {
+      try {
+        disposeNative();
+      } catch (e) {
+        debugPrint('[exit] disposeNative error: $e');
+      }
+    }
   }
 
   @override
@@ -408,76 +441,43 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
       });
     }
 
-    return AnimatedBuilder(
-      animation: _exitAnimationController,
-      builder: (context, child) {
-        return Stack(
+    // 退出中：最简 overlay，不包含任何动画 widget
+    if (_isExiting) {
+      return Container(
+        color: isDark ? Colors.black : Colors.white,
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [const Color(0xFF12131A), const Color(0xFF1E1F2D)]
+                : [const Color(0xFFF6F7FB), const Color(0xFFEEF1F8)],
+          ),
+        ),
+        child: Row(
           children: [
-            Opacity(
-              opacity: _exitOpacity.value,
-              child: Transform.scale(
-                scale: _exitScale.value,
-                child: child,
+            _CapsuleNavRail(
+              selectedIndex: ref.watch(currentPageProvider),
+              items: _navItems,
+              onSelect: (i) =>
+                  ref.read(currentPageProvider.notifier).state = i,
+            ),
+            Expanded(
+              child: IndexedStack(
+                index: ref.watch(currentPageProvider),
+                children: const [
+                  BrowserPage(),
+                  DashboardPage(),
+                ],
               ),
             ),
-            if (_isExiting)
-              FadeTransition(
-                opacity: CurvedAnimation(
-                  parent: _exitAnimationController,
-                  curve: const Interval(0.2, 1.0),
-                ),
-                child: Container(
-                  color: isDark ? Colors.black : Colors.white,
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(
-                          '正在关闭应用...',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isDark ? Colors.white70 : Colors.black54,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
           ],
-        );
-      },
-      child: Scaffold(
-        body: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: isDark
-                  ? [const Color(0xFF12131A), const Color(0xFF1E1F2D)]
-                  : [const Color(0xFFF6F7FB), const Color(0xFFEEF1F8)],
-            ),
-          ),
-          child: Row(
-            children: [
-              _CapsuleNavRail(
-                selectedIndex: ref.watch(currentPageProvider),
-                items: _navItems,
-                onSelect: (i) => ref.read(currentPageProvider.notifier).state = i,
-              ),
-              Expanded(
-                child: IndexedStack(
-                  index: ref.watch(currentPageProvider),
-                  children: const [
-                    BrowserPage(),
-                    DashboardPage(),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );

@@ -42,6 +42,7 @@ class _TagEditorDialogState extends ConsumerState<_TagEditorDialog> {
   @override
   Widget build(BuildContext context) {
     final tagsAsync = ref.watch(allTagsProvider);
+    final hasTags = tagsAsync.valueOrNull?.isNotEmpty ?? false;
 
     return AlertDialog(
       title: Text(
@@ -93,7 +94,7 @@ class _TagEditorDialogState extends ConsumerState<_TagEditorDialog> {
           child: const Text('取消'),
         ),
         FilledButton(
-          onPressed: _busy ? null : _save,
+          onPressed: (_busy || !hasTags) ? null : _save,
           child: _busy
               ? const SizedBox(
                   width: 16,

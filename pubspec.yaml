@@ -46,6 +46,9 @@ dependencies:
   crypto: ^3.0.3                  # MD5 计算
   window_manager: ^0.4.3          # 窗口关闭拦截（桌面端）
 
+  # Rust FFI
+  flutter_rust_bridge: ^2.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Rust
+native/target/
+
+# Dev-only files (benchmarks, test fixtures, scripts, logs)
+/_dev/
