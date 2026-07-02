@@ -66,7 +66,11 @@ class _TagEditorDialogState extends ConsumerState<_TagEditorDialog> {
               _initialized = true;
               _initPendingState(tags);
             }
-            return SingleChildScrollView(
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.55,
+              ),
+              child: SingleChildScrollView(
               child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -83,6 +87,7 @@ class _TagEditorDialogState extends ConsumerState<_TagEditorDialog> {
                     onSelected: (v) => setState(() => _pending[t.id] = v),
                   );
                 }).toList(),
+              ),
               ),
             );
           },

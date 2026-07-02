@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import '../../db/database.dart';
@@ -519,12 +520,18 @@ class _MediaDetailDialog extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final exif = meta.exif;
-    return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760, maxHeight: 640),
-        child: Column(
-          children: [
-            AppBar(
+    return CallbackShortcuts(
+      bindings: {
+        SingleActivator(LogicalKeyboardKey.escape): () => Navigator.pop(context),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760, maxHeight: 640),
+            child: Column(
+              children: [
+                AppBar(
               title: Text(p.basename(meta.item.filePath)),
               automaticallyImplyLeading: false,
               actions: [
@@ -574,6 +581,14 @@ class _MediaDetailDialog extends ConsumerWidget {
                           _infoRow('大小', _formatSize(meta.item.fileSizeBytes)),
                           _infoRow('类型', meta.item.fileType),
                           const SizedBox(height: 12),
+                          if (meta.videoMeta != null) ...[
+                            _section('视频'),
+                            _infoRow('分辨率', '${meta.videoMeta!.width}×${meta.videoMeta!.height}'),
+                            _infoRow('时长', _formatDuration(meta.videoMeta!.durationSec)),
+                            _infoRow('编码', meta.videoMeta!.codec),
+                            _infoRow('码率', _formatBitrate(meta.videoMeta!.bitrate)),
+                            const SizedBox(height: 12),
+                          ],
                           if (exif != null) ...[
                             _section('EXIF'),
                             _infoRow('拍摄时间', exif.dateTaken?.toString() ?? '-'),
@@ -632,6 +647,8 @@ class _MediaDetailDialog extends ConsumerWidget {
           ],
         ),
       ),
+      ),
+      ),
     );
   }
 
@@ -669,5 +686,21 @@ class _MediaDetailDialog extends ConsumerWidget {
       return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
     }
     return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+  }
+
+  String _formatDuration(double seconds) {
+    if (seconds <= 0) return '-';
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    final s = (seconds % 60).round();
+    if (h > 0) return '${h}h ${m}m ${s}s';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
+  }
+
+  String _formatBitrate(int bps) {
+    if (bps <= 0) return '-';
+    if (bps >= 1000000) return '${(bps / 1000000).toStringAsFixed(1)} Mbps';
+    return '${(bps / 1000).toStringAsFixed(0)} Kbps';
   }
 }

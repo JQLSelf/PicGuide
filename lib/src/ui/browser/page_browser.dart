@@ -27,6 +27,7 @@ import 'widget_media_grid_item.dart';
 import 'widget_pixel_thumb.dart';
 import 'widget_scan_progress.dart';
 import 'dialog_scan_config.dart';
+import 'view_video_player.dart';
 import '../tags/dialog_tag_editor.dart';
 import '../widgets/view_full_screen_image.dart';
 
@@ -72,6 +73,7 @@ class SearchFilters {
   final Set<String> cities; // cityName
   final DateTimeRange? dateRange;
   final Set<int> tagIds; // 任一命中即通过（OR）
+  final String? fileType; // null=全部, 'image'=仅图片, 'video'=仅视频
 
   const SearchFilters({
     this.filename = '',
@@ -79,6 +81,7 @@ class SearchFilters {
     this.cities = const {},
     this.dateRange,
     this.tagIds = const {},
+    this.fileType,
   });
 
   bool get isEmpty =>
@@ -86,14 +89,16 @@ class SearchFilters {
       cameras.isEmpty &&
       cities.isEmpty &&
       dateRange == null &&
-      tagIds.isEmpty;
+      tagIds.isEmpty &&
+      fileType == null;
 
   /// 不含文件名的活跃条件数（用于过滤按钮角标）
   int get activeExtras =>
       (cameras.isNotEmpty ? 1 : 0) +
       (cities.isNotEmpty ? 1 : 0) +
       (dateRange != null ? 1 : 0) +
-      (tagIds.isNotEmpty ? 1 : 0);
+      (tagIds.isNotEmpty ? 1 : 0) +
+      (fileType != null ? 1 : 0);
 
   SearchFilters copyWith({
     String? filename,
@@ -102,6 +107,8 @@ class SearchFilters {
     DateTimeRange? dateRange,
     bool clearDateRange = false,
     Set<int>? tagIds,
+    String? fileType,
+    bool clearFileType = false,
   }) {
     return SearchFilters(
       filename: filename ?? this.filename,
@@ -109,6 +116,7 @@ class SearchFilters {
       cities: cities ?? this.cities,
       dateRange: clearDateRange ? null : (dateRange ?? this.dateRange),
       tagIds: tagIds ?? this.tagIds,
+      fileType: clearFileType ? null : (fileType ?? this.fileType),
     );
   }
 }
@@ -184,12 +192,13 @@ final browserMediaProvider =
               ? <Tag>[]
               : await (db.select(db.tags)..where((t) => t.id.isIn(tagIdList)))
                   .get();
-          return MediaItemWithMeta(item: it, exif: exif, tags: tags);
+          return MediaItemWithMeta(item: it, exif: exif, tags: tags,
+              videoMeta: await db.getVideoMeta(it.id));
         }));
     }
   }();
 
-  // 5 项搜索条件（文件名 / 设备 / 城市 / 拍摄时间 / 标签）
+  // 6 项搜索条件（文件名 / 设备 / 城市 / 拍摄时间 / 标签 / 媒体类型）
   final filters = ref.watch(searchFiltersProvider);
   final filtered = filters.isEmpty
       ? raw
@@ -229,6 +238,11 @@ final browserMediaProvider =
           if (filters.tagIds.isNotEmpty) {
             final itemTagIds = m.tags.map((t) => t.id).toSet();
             if (filters.tagIds.intersection(itemTagIds).isEmpty) return false;
+          }
+          // 6) 媒体类型（image / video）
+          if (filters.fileType != null &&
+              m.item.fileType != filters.fileType) {
+            return false;
           }
           return true;
         }).toList();
@@ -444,7 +458,7 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
     const style = TextStyle(fontWeight: FontWeight.w600, fontSize: 15);
     switch (m) {
       case BrowserMode.timeline:
-        return const Text('PixelVault · 全部', style: style);
+        return const Text('PicGuide · 全部', style: style);
       case BrowserMode.folder:
         return Text(folder != null ? p.basename(folder) : '文件夹', style: style);
       case BrowserMode.tag:
@@ -690,90 +704,70 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
   }
 
   Future<void> _reconcileAll() async {
-    final db = ref.read(databaseProvider);
-    ref.read(scanStateProvider.notifier).state = const ScanProgress(
-        current: 0,
-        total: 1,
-        currentFile: '对账中…',
-        phase: ScanPhase.reconciling);
-    try {
-      final missing = await db.reconcileAll();
-      if (!mounted) return;
-
-      // 对账后重建时间轴索引（缺失文件已标记，需要重新计算）
-      ref.read(scanStateProvider.notifier).state = const ScanProgress(
-          current: 0,
-          total: 1,
-          currentFile: '更新时间轴索引中…',
-          phase: ScanPhase.rebuildingIndex);
-      await db.rebuildDateIndexes();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('对账完成，${missing} 个文件标记为缺失')),
-      );
-      ref.read(browserRefreshSignalProvider.notifier).state++;
-    } finally {
-      if (mounted) {
-        ref.read(scanStateProvider.notifier).state = null;
-      }
-    }
+    if (!mounted) return;
+    await _showTaskProgressDialog(
+      context,
+      ref,
+      title: '全库对账',
+      completedMessage: '对账完成，{} 个文件标记为缺失',
+      run: (onProgress) async {
+        final db = ref.read(databaseProvider);
+        onProgress('对账中…', 0, 1);
+        final missing = await db.reconcileAll(
+          onProgress: (current, total) {
+            onProgress('对账中 $current/$total', current, total);
+          },
+        );
+        onProgress('更新时间轴索引中…', 0, 0);
+        await db.rebuildDateIndexes();
+        return missing;
+      },
+    );
   }
 
   /// 全库重新分析区域：把所有带 GPS 的 EXIF 行用离线 RegionResolver 重新
   /// 反查为省/市/县，并回写数据库。完成后刷新浏览器列表。
   Future<void> _reAnalyzeRegions() async {
-    final db = ref.read(databaseProvider);
-    final scanner = MediaScanner(db);
-    ref.read(scanStateProvider.notifier).state =
-        const ScanProgress(current: 0, total: 0, currentFile: '加载离线地图…');
-    try {
-      // 先把“加载离线地图”放出来一帧，让用户看到
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      final updated = await scanner.reAnalyzeAllRegions();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('区域分析完成，共处理 $updated 条 EXIF')),
-      );
-      ref.read(browserRefreshSignalProvider.notifier).state++;
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('区域分析失败: $e')),
-      );
-    } finally {
-      if (mounted) {
-        ref.read(scanStateProvider.notifier).state = null;
-      }
-    }
+    if (!mounted) return;
+    await _showTaskProgressDialog(
+      context,
+      ref,
+      title: '重新分析区域',
+      completedMessage: '区域分析完成，共处理 {} 条 EXIF',
+      run: (onProgress) async {
+        final db = ref.read(databaseProvider);
+        final scanner = MediaScanner(db);
+        onProgress('加载离线地图…', 0, 0);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final updated = await scanner.reAnalyzeAllRegions(
+          onProgress: (current, total) {
+            onProgress('分析中 $current/$total', current, total);
+          },
+        );
+        return updated;
+      },
+    );
   }
 
   /// 全库缩略图扫描：检测并重新生成所有缺失的缩略图
   Future<void> _regenerateAllThumbnails() async {
-    final db = ref.read(databaseProvider);
-    final scanner = MediaScanner(db);
-    ref.read(scanStateProvider.notifier).state = const ScanProgress(
-        current: 0,
-        total: 0,
-        currentFile: '扫描缩略图…',
-        phase: ScanPhase.generatingThumbnails);
-    try {
-      final generated = await scanner.generateMissingThumbnails();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('缩略图扫描完成，共生成 $generated 张缩略图')),
-      );
-      ref.read(browserRefreshSignalProvider.notifier).state++;
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('缩略图扫描失败: $e')),
-      );
-    } finally {
-      if (mounted) {
-        ref.read(scanStateProvider.notifier).state = null;
-      }
-    }
+    if (!mounted) return;
+    await _showTaskProgressDialog(
+      context,
+      ref,
+      title: '全库缩略图扫描',
+      completedMessage: '缩略图扫描完成，共生成 {} 张缩略图',
+      run: (onProgress) async {
+        final db = ref.read(databaseProvider);
+        final scanner = MediaScanner(db);
+        final generated = await scanner.generateMissingThumbnails(
+          onProgress: (current, total, fileName) {
+            onProgress(fileName, current, total);
+          },
+        );
+        return generated;
+      },
+    );
   }
 
   /// 批量重新生成缩略图：对选中的文件重新生成缩略图
@@ -788,66 +782,44 @@ class _BrowserPageState extends ConsumerState<BrowserPage> {
       return;
     }
 
-    final db = ref.read(databaseProvider);
-    final scanner = MediaScanner(db);
-    ref.read(scanStateProvider.notifier).state = ScanProgress(
-        current: 0,
-        total: selection.length,
-        currentFile: '生成缩略图…',
-        phase: ScanPhase.generatingThumbnails);
+    await _showTaskProgressDialog(
+      context,
+      ref,
+      title: '批量生成缩略图',
+      completedMessage: '批量缩略图生成完成，共处理 {} 个文件',
+      run: (onProgress) async {
+        final db = ref.read(databaseProvider);
+        final scanner = MediaScanner(db);
+        int count = 0;
+        final ids = selection.toList();
+        final total = ids.length;
+        for (int i = 0; i < total; i++) {
+          final id = ids[i];
+          onProgress('生成缩略图 $i/$total', i, total);
 
-    try {
-      int count = 0;
-      for (final id in selection) {
-        // 检查是否需要停止
-        if (ref.read(scanStateProvider) == null) {
-          break;
-        }
+          // 获取文件信息
+          final items = await (db.select(db.mediaItems)
+                ..where((t) => t.id.equals(id)))
+              .get();
+          if (items.isEmpty) continue;
+          final item = items.first;
 
-        // 获取文件信息：通过 ID 查询
-        final items = await (db.select(db.mediaItems)
-              ..where((t) => t.id.equals(id)))
-            .get();
-        if (items.isEmpty) continue;
-        final item = items.first;
-
-        // 重新生成缩略图
-        final file = File(item.filePath);
-        if (await file.exists()) {
-          final mediaId =
-              (item.md5?.isNotEmpty ?? false) ? item.md5! : item.id.toString();
-          final thumbPath = await scanner.generateThumbnail(file, mediaId);
-          if (thumbPath != null) {
-            await db.updateMedia(
-                id, MediaItemsCompanion(thumbnailPath: Value(thumbPath)));
-            count++;
+          // 重新生成缩略图
+          final file = File(item.filePath);
+          if (await file.exists()) {
+            final mediaId =
+                (item.md5?.isNotEmpty ?? false) ? item.md5! : item.id.toString();
+            final thumbPath = await scanner.generateThumbnail(file, mediaId);
+            if (thumbPath != null) {
+              await db.updateMedia(
+                  id, MediaItemsCompanion(thumbnailPath: Value(thumbPath)));
+              count++;
+            }
           }
         }
-
-        // 更新进度
-        ref.read(scanStateProvider.notifier).state = ScanProgress(
-          current: count,
-          total: selection.length,
-          currentFile: '生成缩略图…',
-          phase: ScanPhase.generatingThumbnails,
-        );
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('批量缩略图生成完成，共处理 $count 个文件')),
-      );
-      ref.read(browserRefreshSignalProvider.notifier).state++;
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('批量缩略图生成失败: $e')),
-      );
-    } finally {
-      if (mounted) {
-        ref.read(scanStateProvider.notifier).state = null;
-      }
-    }
+        return count;
+      },
+    );
   }
 
   Future<void> _scanFolder(String folder) async {
@@ -1342,6 +1314,15 @@ class _ActiveChipsRow extends ConsumerWidget {
             filters.copyWith(tagIds: const {}),
       ));
     }
+    if (filters.fileType != null) {
+      chips.add(_chip(
+        context,
+        ref,
+        filters.fileType == 'image' ? '仅图片' : '仅视频',
+        onDelete: () => ref.read(searchFiltersProvider.notifier).state =
+            filters.copyWith(clearFileType: true),
+      ));
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Wrap(spacing: 6, runSpacing: 4, children: chips),
@@ -1484,9 +1465,20 @@ class _AdvancedFilterDialogState extends ConsumerState<_AdvancedFilterDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('高级搜索'),
-      content: SizedBox(
+    return CallbackShortcuts(
+      bindings: {
+        SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.pop(context),
+      },
+      child: Focus(
+        autofocus: true,
+        child: AlertDialog(
+          title: const Text('高级搜索'),
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        child: SizedBox(
         width: 460,
         child: SingleChildScrollView(
           child: Column(
@@ -1584,9 +1576,45 @@ class _AdvancedFilterDialogState extends ConsumerState<_AdvancedFilterDialog> {
                   _draft = _draft.copyWith(tagIds: next);
                 }),
               ),
+              const SizedBox(height: 14),
+              _SectionLabel('媒体类型'),
+              Row(
+                children: [
+                  ChoiceChip(
+                    label: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.image_outlined, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('图片', style: TextStyle(fontSize: 11)),
+                    ]),
+                    selected: _draft.fileType == 'image',
+                    onSelected: (_) => setState(() => _draft =
+                        _draft.copyWith(
+                            fileType: _draft.fileType == 'image'
+                                ? null
+                                : 'image')),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.videocam_outlined, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('视频', style: TextStyle(fontSize: 11)),
+                    ]),
+                    selected: _draft.fileType == 'video',
+                    onSelected: (_) => setState(() => _draft =
+                        _draft.copyWith(
+                            fileType: _draft.fileType == 'video'
+                                ? null
+                                : 'video')),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
+      ),
       ),
       actions: [
         TextButton(
@@ -1596,6 +1624,7 @@ class _AdvancedFilterDialogState extends ConsumerState<_AdvancedFilterDialog> {
               cities: const {},
               tagIds: const {},
               clearDateRange: true,
+              clearFileType: true,
             );
           }),
           child: const Text('清空'),
@@ -1612,6 +1641,8 @@ class _AdvancedFilterDialogState extends ConsumerState<_AdvancedFilterDialog> {
           child: const Text('应用'),
         ),
       ],
+      ),
+    ),
     );
   }
 }
@@ -1646,7 +1677,7 @@ class _MultiChips extends StatelessWidget {
     return future.when(
       loading: () => const SizedBox(
           height: 32, child: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Text('$e', style: const TextStyle(color: Colors.red)),
+      error: (e, _) => Text('$e', style: const TextStyle(color: Colors.red), maxLines: 2, overflow: TextOverflow.ellipsis),
       data: (items) => items.isEmpty
           ? Text(emptyText,
               style: TextStyle(
@@ -1679,7 +1710,7 @@ class _TagChips extends ConsumerWidget {
     return tagsAsync.when(
       loading: () => const SizedBox(
           height: 32, child: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Text('$e', style: const TextStyle(color: Colors.red)),
+      error: (e, _) => Text('$e', style: const TextStyle(color: Colors.red), maxLines: 2, overflow: TextOverflow.ellipsis),
       data: (tags) => tags.isEmpty
           ? Text('还没有标签，请到侧边栏创建',
               style: TextStyle(
@@ -2703,7 +2734,7 @@ class _TagListState extends ConsumerState<_TagList> {
     final current = ref.watch(currentTagFilterProvider);
     return tagsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Text('$e'),
+      error: (e, _) => Text('$e', maxLines: 2, overflow: TextOverflow.ellipsis),
       data: (tags) => Column(
         children: [
           // ── 新建标签按钮（紧贴模式切换条） ──
@@ -3209,12 +3240,18 @@ class _FolderModeContentState extends ConsumerState<_FolderModeContent> {
           ),
         );
       case ViewMode.medium:
-        // 中图模式：中等卡片，横向滚动
-        return SizedBox(
-          height: 96,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        // 中图模式：中等卡片，网格自适应换行
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 180,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 2.0,
+            ),
             itemCount: subs.length,
             itemBuilder: (_, i) =>
                 _buildFolderCard(subs[i], scheme, folder, large: false),
@@ -3449,7 +3486,7 @@ class _MediaLargeGridState extends ConsumerState<_MediaLargeGrid> {
     final inMulti = selection != null;
     return asyncMedia.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败: $e')),
+      error: (e, _) => Center(child: Text('加载失败', maxLines: 2, overflow: TextOverflow.ellipsis)),
       data: (items) {
         if (items.isEmpty) {
           return const Center(child: Text('没有可显示的媒体，点击右上角"导入"开始'));
@@ -3661,7 +3698,7 @@ class _MediaMediumGridState extends ConsumerState<_MediaMediumGrid> {
     final inMulti = selection != null;
     return asyncMedia.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败: $e')),
+      error: (e, _) => Center(child: Text('加载失败', maxLines: 2, overflow: TextOverflow.ellipsis)),
       data: (items) {
         if (items.isEmpty) {
           return const Center(child: Text('没有可显示的媒体'));
@@ -3867,7 +3904,7 @@ class _MediaListState extends ConsumerState<_MediaList> {
     final inMulti = selection != null;
     return asyncMedia.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败: $e')),
+      error: (e, _) => Center(child: Text('加载失败', maxLines: 2, overflow: TextOverflow.ellipsis)),
       data: (items) {
         if (items.isEmpty) {
           return const Center(child: Text('没有可显示的媒体'));
@@ -4326,7 +4363,6 @@ class _MediumCard extends ConsumerWidget {
         ),
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
@@ -4808,13 +4844,22 @@ class _MediaDetailDialogInlineState extends State<_MediaDetailDialogInline> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer(builder: (context, ref, _) {
-      return _DetailContent(
-        meta: widget.meta,
-        isExpanded: isExpanded,
-        onToggleExpand: () => setState(() => isExpanded = !isExpanded),
-      );
-    });
+    return CallbackShortcuts(
+      bindings: {
+        SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.pop(context),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Consumer(builder: (context, ref, _) {
+          return _DetailContent(
+            meta: widget.meta,
+            isExpanded: isExpanded,
+            onToggleExpand: () => setState(() => isExpanded = !isExpanded),
+          );
+        }),
+      ),
+    );
   }
 }
 
@@ -4972,8 +5017,7 @@ class _DetailContent extends ConsumerWidget {
                                         fit: BoxFit.contain,
                                       ),
                                     )
-                                  : const Icon(Icons.play_circle_outline,
-                                      color: Colors.white, size: 80)),
+                                  : VideoPlayerView(item: meta.item)),
                           // 全屏按钮：固定在图片容器底部居中（不再和翻页按钮重叠）
                           if (meta.item.fileType == 'image' &&
                               !meta.item.isMissing)
@@ -5045,6 +5089,14 @@ class _DetailContent extends ConsumerWidget {
                           _row('MD5', meta.item.md5 ?? '-'),
                           _row('归档于', meta.item.indexedAt.toString()),
                           const SizedBox(height: 12),
+                          if (meta.videoMeta != null) ...[
+                            const _Section('视频'),
+                            _row('分辨率', '${meta.videoMeta!.width}×${meta.videoMeta!.height}'),
+                            _row('时长', _formatDuration(meta.videoMeta!.durationSec)),
+                            _row('编码', meta.videoMeta!.codec),
+                            _row('码率', _formatBitrate(meta.videoMeta!.bitrate)),
+                            const SizedBox(height: 12),
+                          ],
                           if (exif != null) ...[
                             const _Section('EXIF'),
                             _row('拍摄时间', exif.dateTaken?.toString() ?? '-'),
@@ -5147,6 +5199,22 @@ class _Section extends StatelessWidget {
       );
 }
 
+String _formatDuration(double seconds) {
+  if (seconds <= 0) return '-';
+  final h = seconds ~/ 3600;
+  final m = (seconds % 3600) ~/ 60;
+  final s = (seconds % 60).round();
+  if (h > 0) return '${h}h ${m}m ${s}s';
+  if (m > 0) return '${m}m ${s}s';
+  return '${s}s';
+}
+
+String _formatBitrate(int bps) {
+  if (bps <= 0) return '-';
+  if (bps >= 1000000) return '${(bps / 1000000).toStringAsFixed(1)} Mbps';
+  return '${(bps / 1000).toStringAsFixed(0)} Kbps';
+}
+
 /// 详情页左右翻页按钮：放在整个 Row 的最左/最右，**不**叠在图片容器上
 /// 解决"原图很矮时翻页按钮和全屏按钮重叠"的问题。
 class _SideNavButton extends StatelessWidget {
@@ -5235,6 +5303,245 @@ class _InlineTagChip extends StatelessWidget {
       child: Text(tag.name,
           style: TextStyle(
               fontSize: 11, color: color, fontWeight: FontWeight.w500)),
+    );
+  }
+}
+
+// ────────────────────────────────────────────
+// 胶囊弹窗（统一定制进度弹窗）
+// 用于全库对账、缩略图扫描、区域分析等。
+// 显示标题 + 进度条 + 当前项 + 计数，自动适配明暗模式。
+// ────────────────────────────────────────────
+
+Future<void> _showTaskProgressDialog(
+  BuildContext context,
+  WidgetRef ref, {
+  required String title,
+  required Future<int> Function(
+    void Function(String status, int current, int total) onProgress,
+  ) run,
+  required String completedMessage,
+}) async {
+  final statusNotifier = ValueNotifier<_TaskStatus>(const _TaskStatus(
+    current: 0,
+    total: 1,
+    label: '准备中…',
+  ));
+  final resultNotifier = ValueNotifier<String?>(null);
+  bool cancelled = false;
+
+  // showDialog 返回的 Future 在弹窗被 pop 时完成，用于 finally 中释放资源
+  final dialogFuture = showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => CallbackShortcuts(
+      bindings: {
+        SingleActivator(LogicalKeyboardKey.escape): () {
+          if (cancelled) return;
+          // 已完成/失败时 ESC 直接关闭，运行时 ESC 触发取消
+          Navigator.pop(ctx);
+          if (resultNotifier.value == null) {
+            cancelled = true;
+          }
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: _TaskProgressDialog(
+          title: title,
+          status: statusNotifier,
+          resultMessage: resultNotifier,
+          onCancel: () {
+            cancelled = true;
+            Navigator.pop(ctx);
+          },
+          onDone: () => Navigator.pop(ctx),
+        ),
+      ),
+    ),
+  );
+
+  try {
+    final result = await run((status, current, total) {
+      if (cancelled) throw _TaskCancelled();
+      statusNotifier.value = _TaskStatus(
+        current: current,
+        total: total,
+        label: status,
+      );
+    });
+
+    if (!cancelled) {
+      // 进度显示为 100%，结果文字切换到完成信息
+      final total = statusNotifier.value.total;
+      statusNotifier.value = _TaskStatus(
+        current: total,
+        total: total,
+        label: '完成',
+      );
+      resultNotifier.value = completedMessage.replaceFirst('{}', '$result');
+      if (context.mounted) {
+        ref.read(browserRefreshSignalProvider.notifier).state++;
+      }
+      // 1.5 秒后自动关闭；用户也可以手动点"完成"提前关闭
+      Future<void>.delayed(const Duration(milliseconds: 1500)).then((_) {
+        if (context.mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+    }
+  } on _TaskCancelled {
+    // onCancel 已经 pop 了 dialog，无需额外处理
+  } catch (e) {
+    // 失败信息也在弹窗内显示，不再弹出底部 SnackBar
+    resultNotifier.value = '$title 失败：$e';
+  } finally {
+    await dialogFuture;
+    statusNotifier.dispose();
+    resultNotifier.dispose();
+  }
+}
+
+class _TaskCancelled implements Exception {}
+
+class _TaskStatus {
+  final int current;
+  final int total;
+  final String label;
+  const _TaskStatus({
+    required this.current,
+    required this.total,
+    required this.label,
+  });
+}
+
+class _TaskProgressDialog extends StatelessWidget {
+  final String title;
+  final ValueNotifier<_TaskStatus> status;
+  final ValueNotifier<String?> resultMessage;
+  final VoidCallback onCancel;
+  final VoidCallback onDone;
+
+  const _TaskProgressDialog({
+    required this.title,
+    required this.status,
+    required this.resultMessage,
+    required this.onCancel,
+    required this.onDone,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return AlertDialog(
+      backgroundColor: isDark
+          ? const Color(0xFF252836)
+          : const Color(0xFFF8F9FC),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(title,
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: scheme.onSurface)),
+            const SizedBox(height: 16),
+            ValueListenableBuilder<String?>(
+              valueListenable: resultMessage,
+              builder: (_, result, __) {
+                return ValueListenableBuilder<_TaskStatus>(
+                  valueListenable: status,
+                  builder: (_, s, __) {
+                    final done = result != null;
+                    final success = done && s.label == '完成';
+                    final ratio = success
+                        ? 1.0
+                        : (s.total > 0 ? s.current / s.total : 0.0);
+                    final pct = (ratio * 100).toStringAsFixed(0);
+                    return Column(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: LinearProgressIndicator(
+                            value: ratio.clamp(0.0, 1.0),
+                            minHeight: 8,
+                            backgroundColor: scheme.surfaceContainerHighest,
+                            valueColor: AlwaysStoppedAnimation(scheme.primary),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                done ? result : s.label,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: done
+                                      ? (success
+                                          ? scheme.onSurface
+                                          : Colors.red.shade700)
+                                      : scheme.onSurfaceVariant,
+                                  fontWeight: done
+                                      ? FontWeight.w500
+                                      : FontWeight.normal,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (s.total > 0 || done)
+                              Text(
+                                done
+                                    ? (success ? '完成' : '失败')
+                                    : '$pct%',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: done
+                                      ? (success
+                                          ? Colors.green
+                                          : Colors.red)
+                                      : scheme.primary,
+                                ),
+                              ),
+                          ],
+                        ),
+                        if (s.total > 0 && !done) ...[
+                          const SizedBox(height: 4),
+                          Text('${s.current} / ${s.total}',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant.withOpacity(0.7))),
+                        ],
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ValueListenableBuilder<String?>(
+                valueListenable: resultMessage,
+                builder: (_, result, __) {
+                  return TextButton(
+                    onPressed: result != null ? onDone : onCancel,
+                    child: Text(
+                      result != null ? '完成' : '取消',
+                      style: TextStyle(color: scheme.onSurfaceVariant.withOpacity(0.7)),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

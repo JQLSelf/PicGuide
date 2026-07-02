@@ -4,6 +4,7 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../db/database.dart';
 import '../../providers/provider_app.dart';
@@ -235,6 +236,15 @@ class ActiveChipsRow extends ConsumerWidget {
             filters.copyWith(tagIds: const {}),
       ));
     }
+    if (filters.fileType != null) {
+      chips.add(_chip(
+        context,
+        ref,
+        filters.fileType == 'image' ? '仅图片' : '仅视频',
+        onDelete: () => ref.read(searchFiltersProvider.notifier).state =
+            filters.copyWith(clearFileType: true),
+      ));
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Wrap(spacing: 6, runSpacing: 4, children: chips),
@@ -375,9 +385,20 @@ class _AdvancedFilterDialogState extends ConsumerState<AdvancedFilterDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('高级搜索'),
-      content: SizedBox(
+    return CallbackShortcuts(
+      bindings: {
+        SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.pop(context),
+      },
+      child: Focus(
+        autofocus: true,
+        child: AlertDialog(
+          title: const Text('高级搜索'),
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        child: SizedBox(
         width: 460,
         child: SingleChildScrollView(
           child: Column(
@@ -474,9 +495,45 @@ class _AdvancedFilterDialogState extends ConsumerState<AdvancedFilterDialog> {
                   _draft = _draft.copyWith(tagIds: next);
                 }),
               ),
+              const SizedBox(height: 14),
+              SectionLabel('媒体类型'),
+              Row(
+                children: [
+                  ChoiceChip(
+                    label: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.image_outlined, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('图片', style: TextStyle(fontSize: 11)),
+                    ]),
+                    selected: _draft.fileType == 'image',
+                    onSelected: (_) => setState(() => _draft =
+                        _draft.copyWith(
+                            fileType: _draft.fileType == 'image'
+                                ? null
+                                : 'image')),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.videocam_outlined, size: 16),
+                      const SizedBox(width: 4),
+                      const Text('视频', style: TextStyle(fontSize: 11)),
+                    ]),
+                    selected: _draft.fileType == 'video',
+                    onSelected: (_) => setState(() => _draft =
+                        _draft.copyWith(
+                            fileType: _draft.fileType == 'video'
+                                ? null
+                                : 'video')),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
+      ),
       ),
       actions: [
         TextButton(
@@ -486,6 +543,7 @@ class _AdvancedFilterDialogState extends ConsumerState<AdvancedFilterDialog> {
               cities: const {},
               tagIds: const {},
               clearDateRange: true,
+              clearFileType: true,
             );
           }),
           child: const Text('清空'),
@@ -502,6 +560,8 @@ class _AdvancedFilterDialogState extends ConsumerState<AdvancedFilterDialog> {
           child: const Text('应用'),
         ),
       ],
+      ),
+    ),
     );
   }
 }

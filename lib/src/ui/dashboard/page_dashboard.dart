@@ -113,7 +113,7 @@ class DashboardPage extends ConsumerWidget {
               loading: () => const SizedBox(
                   height: 80,
                   child: Center(child: CircularProgressIndicator())),
-              error: (e, _) => Text('$e'),
+              error: (e, _) => Text('加载失败', maxLines: 2, overflow: TextOverflow.ellipsis),
               data: (stats) => _StatsRow(stats: stats),
             ),
             const SizedBox(height: 24),
@@ -311,7 +311,7 @@ class _FileSizePieCard extends ConsumerWidget {
               loading: () => const SizedBox(
                   height: 200,
                   child: Center(child: CircularProgressIndicator())),
-              error: (e, _) => Text('$e'),
+              error: (e, _) => Text('加载失败', maxLines: 2, overflow: TextOverflow.ellipsis),
               data: (buckets) => _PieChart(buckets: buckets),
             ),
           ],
@@ -727,7 +727,7 @@ class _TagCloudCard extends ConsumerWidget {
               loading: () => const SizedBox(
                   height: 120,
                   child: Center(child: CircularProgressIndicator())),
-              error: (e, _) => Text('$e'),
+              error: (e, _) => Text('加载失败', maxLines: 2, overflow: TextOverflow.ellipsis),
               data: (items) => _TagWordCloud(items: items),
             ),
           ],

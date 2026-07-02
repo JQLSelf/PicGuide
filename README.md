@@ -1,4 +1,4 @@
-# PixelVault — 图片视频浏览器
+# PicGuide — 图片视频浏览器
 
 > Flutter 跨平台图片管理工具，支持 Windows 和 Linux。
 > 采用企业级 **类型_功能** 命名规范，代码可读性和维护性达到全新高度。
@@ -109,6 +109,26 @@ flutter pub get
 
 > 当前依赖已优化至 **24 个包**（清理前 27 个），无任何冗余。
 
+### 1.5. 预缓存 media_kit 二进制（仅 Windows）
+
+`media_kit` 视频播放依赖 mpv 和 ANGLE 两个预编译二进制，CMake 默认从 GitHub 下载（约 13 MB），国内网络可能无法直连。
+
+项目已内置 **离线缓存引用机制**，方便离线打包，避免每次 `flutter clean` 后重新下载：
+
+```powershell
+# 一键下载（需要能访问 GitHub）
+powershell -ExecutionPolicy Bypass -File .\vendor\mpv\download.ps1
+```
+
+或手动下载以下两个文件放入 `vendor/mpv/` 目录：
+
+| 文件 | 大小 | 下载地址 |
+|------|------|---------|
+| `mpv-dev-x86_64-20230924-git-652a1dd.7z` | 8.38 MB | [GitHub Releases](https://github.com/media-kit/libmpv-win32-video-build/releases/download/2023-09-24/mpv-dev-x86_64-20230924-git-652a1dd.7z) |
+| `ANGLE.7z` | 4.8 MB | [GitHub Releases](https://github.com/alexmercerind/flutter-windows-ANGLE-OpenGL-ES/releases/download/v1.0.1/ANGLE.7z) |
+
+> 💡 缓存后的文件位于 `vendor/mpv/`，不受 `flutter clean` 影响。CMake 编译时会自动从该目录复制到构建目录，跳过网络下载。**将此目录纳入版本控制后，其他开发者或 CI 环境也无需额外下载。**
+
 ### 2. 生成代码（drift ORM + Riverpod）
 
 ```bash
@@ -157,7 +177,7 @@ flutter build linux --release
 [5/8] 检测 Visual Studio（Windows 桌面开发必需）
 [6/8] 运行 flutter doctor，下载 Dart/工具链
 [7/8] 启用 Windows 桌面支持（flutter config --enable-windows-desktop）
-[8/8] 为 PixelVault 项目执行 flutter pub get
+[8/8] 为 PicGuide 项目执行 flutter pub get
 ```
 
 > **⚠️ 注意**：Flutter SDK 从 Google 服务器下载，国内网络可能需要翻墙。若下载失败，脚本会提示手动下载地址，也可使用国内镜像站 https://flutter.cn
@@ -254,10 +274,10 @@ powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 
 ```
 dist\
-├── PixelVault-1.0.0-win-x64.zip            ← 绿色版（解压即用）
-├── PixelVault-1.0.0-win-x64.zip.sha256.txt
-├── PixelVault-1.0.0-win-x64-Setup.exe      ⭐ 双击安装的标准 Windows 安装包
-└── PixelVault-1.0.0-win-x64-Setup.exe.sha256.txt
+├── PicGuide-1.0.0-win-x64.zip            ← 绿色版（解压即用）
+├── PicGuide-1.0.0-win-x64.zip.sha256.txt
+├── PicGuide-1.0.0-win-x64-Setup.exe      ⭐ 双击安装的标准 Windows 安装包
+└── PicGuide-1.0.0-win-x64-Setup.exe.sha256.txt
 ```
 
 ### 4.2 常用参数
@@ -285,7 +305,7 @@ powershell -ExecutionPolicy Bypass -File .\install_inno_setup.ps1
 ### 4.4 安装包特性（Setup.exe）
 
 - 标准 Windows 安装向导（Next / Install / Finish）
-- 默认安装路径：`C:\Program Files\PixelVault\`
+- 默认安装路径：`C:\Program Files\PicGuide\`
 - 自动创建桌面 / 开始菜单快捷方式
 - 控制面板 → 程序 → 卸载 可干净卸载
 - 启动时自动把 `USER_MANUAL.md` 复制到安装目录

@@ -157,13 +157,13 @@ mkdir test_images
 在VS Code的控制台或Flutter DevTools中查看：
 
 ```
-[PixelVault] 🚀 开始扫描: /path/to/images
-[PixelVault] 📊 算法配置: 并行扫描 (Worker: 8, Batch: 100)
-[PixelVault] 📁 找到 500 个图片文件
-[PixelVault] ❌ 处理文件失败: xxx.jpg - Exception...
-[PixelVault] ⬆️ 性能良好，增加 Worker: 4 -> 5
-[PixelVault] 📊 对账完成：缺失 2 个文件
-[PixelVault] ✅ 扫描完成
+[PicGuide] 🚀 开始扫描: /path/to/images
+[PicGuide] 📊 算法配置: 并行扫描 (Worker: 8, Batch: 100)
+[PicGuide] 📁 找到 500 个图片文件
+[PicGuide] ❌ 处理文件失败: xxx.jpg - Exception...
+[PicGuide] ⬆️ 性能良好，增加 Worker: 4 -> 5
+[PicGuide] 📊 对账完成：缺失 2 个文件
+[PicGuide] ✅ 扫描完成
 ```
 
 ### **性能指标**

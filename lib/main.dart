@@ -6,9 +6,11 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:media_kit/media_kit.dart';
 import 'src/providers/provider_app.dart';
 import 'src/ui/browser/page_browser.dart';
 import 'src/ui/dashboard/page_dashboard.dart';
@@ -20,6 +22,9 @@ import 'src/services/native_bridge.dart' show nativeVersion, disposeNative;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ─── 视频播放器初始化 ───
+  MediaKit.ensureInitialized();
 
   // ─── Rust FFI 验证（Phase 0.5，仅 Windows）───
   if (Platform.isWindows) {
@@ -54,7 +59,7 @@ void main() async {
       overrides: [
         databaseProvider.overrideWithValue(db),
       ],
-      child: const PixelVaultApp(),
+      child: const PicGuideApp(),
     ),
   );
 }
@@ -62,15 +67,15 @@ void main() async {
 /// 主题模式 Provider
 final themeModeProvider = StateProvider<ThemeMode>((_) => ThemeMode.system);
 
-class PixelVaultApp extends ConsumerWidget {
-  const PixelVaultApp({super.key});
+class PicGuideApp extends ConsumerWidget {
+  const PicGuideApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
 
     return MaterialApp(
-      title: 'PixelVault',
+      title: 'PicGuide',
       debugShowCheckedModeBanner: false,
       theme: _buildLightTheme(),
       darkTheme: _buildDarkTheme(),
@@ -339,19 +344,29 @@ class _AppShellState extends ConsumerState<AppShell> with WindowListener, Single
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('退出应用'),
-        content: Text(isScanning
-            ? '正在扫描中，是否确认退出？\n退出后扫描任务将自动停止。'
-            : '确定要退出应用吗？'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton.tonal(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text('退出', style: TextStyle(color: Colors.red.shade400))),
-        ],
+      builder: (ctx) => CallbackShortcuts(
+        bindings: {
+          SingleActivator(LogicalKeyboardKey.escape): () =>
+              Navigator.pop(ctx, false),
+        },
+        child: Focus(
+          autofocus: true,
+          child: AlertDialog(
+            title: const Text('退出应用'),
+            content: Text(isScanning
+                ? '正在扫描中，是否确认退出？\n退出后扫描任务将自动停止。'
+                : '确定要退出应用吗？'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('取消')),
+              FilledButton.tonal(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text('退出',
+                      style: TextStyle(color: Colors.red.shade400))),
+            ],
+          ),
+        ),
       ),
     );
 

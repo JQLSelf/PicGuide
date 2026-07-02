@@ -2612,6 +2612,364 @@ class MediaDateIndexesCompanion extends UpdateCompanion<MediaDateIndex> {
   }
 }
 
+// ── VideoMetas auto-generated ──
+
+class $VideoMetasTable extends VideoMetas
+    with TableInfo<$VideoMetasTable, VideoMeta> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $VideoMetasTable(this.attachedDatabase, [this._alias]);
+
+  static const VerificationMeta _mediaItemIdMeta =
+      const VerificationMeta('mediaItemId');
+  @override
+  late final GeneratedColumn<int> mediaItemId = GeneratedColumn<int>(
+      'media_item_id', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'REFERENCES media_items (id) ON DELETE CASCADE'));
+  static const VerificationMeta _durationSecMeta =
+      const VerificationMeta('durationSec');
+  @override
+  late final GeneratedColumn<double> durationSec = GeneratedColumn<double>(
+      'duration_sec', aliasedName, false,
+      type: DriftSqlType.double, requiredDuringInsert: true);
+  static const VerificationMeta _widthMeta = const VerificationMeta('width');
+  @override
+  late final GeneratedColumn<int> width = GeneratedColumn<int>(
+      'width', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _heightMeta =
+      const VerificationMeta('height');
+  @override
+  late final GeneratedColumn<int> height = GeneratedColumn<int>(
+      'height', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _codecMeta = const VerificationMeta('codec');
+  @override
+  late final GeneratedColumn<String> codec = GeneratedColumn<String>(
+      'codec', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _bitrateMeta =
+      const VerificationMeta('bitrate');
+  @override
+  late final GeneratedColumn<int> bitrate = GeneratedColumn<int>(
+      'bitrate', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+
+  @override
+  List<GeneratedColumn> get $columns =>
+      [mediaItemId, durationSec, width, height, codec, bitrate];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'video_metas';
+
+  @override
+  VerificationContext validateIntegrity(Insertable<VideoMeta> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('media_item_id')) {
+      context.handle(_mediaItemIdMeta, mediaItemId.isAcceptableOrUnknown(
+          data['media_item_id']!, _mediaItemIdMeta));
+    } else if (isInserting) {
+      context.missing(_mediaItemIdMeta);
+    }
+    if (data.containsKey('duration_sec')) {
+      context.handle(_durationSecMeta, durationSec.isAcceptableOrUnknown(
+          data['duration_sec']!, _durationSecMeta));
+    } else if (isInserting) {
+      context.missing(_durationSecMeta);
+    }
+    if (data.containsKey('width')) {
+      context.handle(_widthMeta,
+          width.isAcceptableOrUnknown(data['width']!, _widthMeta));
+    } else if (isInserting) {
+      context.missing(_widthMeta);
+    }
+    if (data.containsKey('height')) {
+      context.handle(_heightMeta,
+          height.isAcceptableOrUnknown(data['height']!, _heightMeta));
+    } else if (isInserting) {
+      context.missing(_heightMeta);
+    }
+    if (data.containsKey('codec')) {
+      context.handle(_codecMeta,
+          codec.isAcceptableOrUnknown(data['codec']!, _codecMeta));
+    } else if (isInserting) {
+      context.missing(_codecMeta);
+    }
+    if (data.containsKey('bitrate')) {
+      context.handle(_bitrateMeta,
+          bitrate.isAcceptableOrUnknown(data['bitrate']!, _bitrateMeta));
+    } else if (isInserting) {
+      context.missing(_bitrateMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {mediaItemId};
+
+  @override
+  VideoMeta map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return VideoMeta(
+      mediaItemId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}media_item_id'])!,
+      durationSec: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}duration_sec'])!,
+      width: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}width'])!,
+      height: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}height'])!,
+      codec: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}codec'])!,
+      bitrate: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}bitrate'])!,
+    );
+  }
+
+  @override
+  $VideoMetasTable createAlias(String alias) =>
+      $VideoMetasTable(attachedDatabase, alias);
+}
+
+class VideoMeta extends DataClass implements Insertable<VideoMeta> {
+  final int mediaItemId;
+  final double durationSec;
+  final int width;
+  final int height;
+  final String codec;
+  final int bitrate;
+
+  const VideoMeta({
+    required this.mediaItemId,
+    required this.durationSec,
+    required this.width,
+    required this.height,
+    required this.codec,
+    required this.bitrate,
+  });
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['media_item_id'] = Variable<int>(mediaItemId);
+    map['duration_sec'] = Variable<double>(durationSec);
+    map['width'] = Variable<int>(width);
+    map['height'] = Variable<int>(height);
+    map['codec'] = Variable<String>(codec);
+    map['bitrate'] = Variable<int>(bitrate);
+    return map;
+  }
+
+  VideoMetasCompanion toCompanion(bool nullToAbsent) {
+    return VideoMetasCompanion(
+      mediaItemId: Value(mediaItemId),
+      durationSec: Value(durationSec),
+      width: Value(width),
+      height: Value(height),
+      codec: Value(codec),
+      bitrate: Value(bitrate),
+    );
+  }
+
+  factory VideoMeta.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return VideoMeta(
+      mediaItemId: serializer.fromJson<int>(json['mediaItemId']),
+      durationSec: serializer.fromJson<double>(json['durationSec']),
+      width: serializer.fromJson<int>(json['width']),
+      height: serializer.fromJson<int>(json['height']),
+      codec: serializer.fromJson<String>(json['codec']),
+      bitrate: serializer.fromJson<int>(json['bitrate']),
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'mediaItemId': serializer.toJson<int>(mediaItemId),
+      'durationSec': serializer.toJson<double>(durationSec),
+      'width': serializer.toJson<int>(width),
+      'height': serializer.toJson<int>(height),
+      'codec': serializer.toJson<String>(codec),
+      'bitrate': serializer.toJson<int>(bitrate),
+    };
+  }
+
+  VideoMeta copyWith({
+    int? mediaItemId,
+    double? durationSec,
+    int? width,
+    int? height,
+    String? codec,
+    int? bitrate,
+  }) =>
+      VideoMeta(
+        mediaItemId: mediaItemId ?? this.mediaItemId,
+        durationSec: durationSec ?? this.durationSec,
+        width: width ?? this.width,
+        height: height ?? this.height,
+        codec: codec ?? this.codec,
+        bitrate: bitrate ?? this.bitrate,
+      );
+
+  VideoMeta copyWithCompanion(VideoMetasCompanion data) {
+    return VideoMeta(
+      mediaItemId: data.mediaItemId.present
+          ? data.mediaItemId.value
+          : this.mediaItemId,
+      durationSec: data.durationSec.present
+          ? data.durationSec.value
+          : this.durationSec,
+      width: data.width.present ? data.width.value : this.width,
+      height: data.height.present ? data.height.value : this.height,
+      codec: data.codec.present ? data.codec.value : this.codec,
+      bitrate: data.bitrate.present ? data.bitrate.value : this.bitrate,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('VideoMeta(')
+          ..write('mediaItemId: $mediaItemId, ')
+          ..write('durationSec: $durationSec, ')
+          ..write('width: $width, ')
+          ..write('height: $height, ')
+          ..write('codec: $codec, ')
+          ..write('bitrate: $bitrate')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(mediaItemId, durationSec, width, height, codec, bitrate);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is VideoMeta &&
+          other.mediaItemId == this.mediaItemId &&
+          other.durationSec == this.durationSec &&
+          other.width == this.width &&
+          other.height == this.height &&
+          other.codec == this.codec &&
+          other.bitrate == this.bitrate);
+}
+
+class VideoMetasCompanion extends UpdateCompanion<VideoMeta> {
+  final Value<int> mediaItemId;
+  final Value<double> durationSec;
+  final Value<int> width;
+  final Value<int> height;
+  final Value<String> codec;
+  final Value<int> bitrate;
+
+  const VideoMetasCompanion({
+    this.mediaItemId = const Value.absent(),
+    this.durationSec = const Value.absent(),
+    this.width = const Value.absent(),
+    this.height = const Value.absent(),
+    this.codec = const Value.absent(),
+    this.bitrate = const Value.absent(),
+  });
+
+  VideoMetasCompanion.insert({
+    required int mediaItemId,
+    required double durationSec,
+    required int width,
+    required int height,
+    required String codec,
+    required int bitrate,
+  })  : mediaItemId = Value(mediaItemId),
+        durationSec = Value(durationSec),
+        width = Value(width),
+        height = Value(height),
+        codec = Value(codec),
+        bitrate = Value(bitrate);
+
+  static Insertable<VideoMeta> custom({
+    Expression<int>? mediaItemId,
+    Expression<double>? durationSec,
+    Expression<int>? width,
+    Expression<int>? height,
+    Expression<String>? codec,
+    Expression<int>? bitrate,
+  }) {
+    return RawValuesInsertable({
+      if (mediaItemId != null) 'media_item_id': mediaItemId,
+      if (durationSec != null) 'duration_sec': durationSec,
+      if (width != null) 'width': width,
+      if (height != null) 'height': height,
+      if (codec != null) 'codec': codec,
+      if (bitrate != null) 'bitrate': bitrate,
+    });
+  }
+
+  VideoMetasCompanion copyWith({
+    Value<int>? mediaItemId,
+    Value<double>? durationSec,
+    Value<int>? width,
+    Value<int>? height,
+    Value<String>? codec,
+    Value<int>? bitrate,
+  }) {
+    return VideoMetasCompanion(
+      mediaItemId: mediaItemId ?? this.mediaItemId,
+      durationSec: durationSec ?? this.durationSec,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      codec: codec ?? this.codec,
+      bitrate: bitrate ?? this.bitrate,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (mediaItemId.present) {
+      map['media_item_id'] = Variable<int>(mediaItemId.value);
+    }
+    if (durationSec.present) {
+      map['duration_sec'] = Variable<double>(durationSec.value);
+    }
+    if (width.present) {
+      map['width'] = Variable<int>(width.value);
+    }
+    if (height.present) {
+      map['height'] = Variable<int>(height.value);
+    }
+    if (codec.present) {
+      map['codec'] = Variable<String>(codec.value);
+    }
+    if (bitrate.present) {
+      map['bitrate'] = Variable<int>(bitrate.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('VideoMetasCompanion(')
+          ..write('mediaItemId: $mediaItemId, ')
+          ..write('durationSec: $durationSec, ')
+          ..write('width: $width, ')
+          ..write('height: $height, ')
+          ..write('codec: $codec, ')
+          ..write('bitrate: $bitrate')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2622,12 +2980,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $FolderScansTable folderScans = $FolderScansTable(this);
   late final $MediaDateIndexesTable mediaDateIndexes =
       $MediaDateIndexesTable(this);
+  late final $VideoMetasTable videoMetas = $VideoMetasTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities =>
-      [mediaItems, exifDatas, tags, mediaTags, folderScans, mediaDateIndexes];
+      [mediaItems, exifDatas, tags, mediaTags, folderScans, mediaDateIndexes, videoMetas];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
         [
@@ -2643,6 +3002,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
                 limitUpdateKind: UpdateKind.delete),
             result: [
               TableUpdate('media_tags', kind: UpdateKind.delete),
+            ],
+          ),
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('media_items',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('video_metas', kind: UpdateKind.delete),
             ],
           ),
           WritePropagation(

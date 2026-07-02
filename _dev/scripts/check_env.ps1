@@ -1,11 +1,11 @@
 # ============================================================
-# PixelVault - Flutter 环境检查脚本
+# PicGuide - Flutter 环境检查脚本
 # 用法: 在项目目录下运行  .\check_env.ps1
 # ============================================================
 
 $ErrorActionPreference = "Continue"
 Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "  PixelVault - 环境检查"                   -ForegroundColor Cyan
+Write-Host "  PicGuide - 环境检查"                   -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 
 $allPass = $true
@@ -85,7 +85,7 @@ if (Test-Path "pubspec.yaml") {
         Check-Result "项目依赖安装成功" $false "flutter pub get 失败" "检查网络 / 国内镜像配置"
     }
 } else {
-    Check-Result "项目目录正确" $false "当前目录不是项目根目录" "cd 到 E:\flutter\desk-pic-view"
+    Check-Result "项目目录正确" $false "当前目录不是项目根目录" "cd 到项目根目录 (有 pubspec.yaml 的文件夹)"
 }
 
 # 7. flutter doctor

@@ -39,6 +39,19 @@ const _imageExts = {
   '.dng',
 };
 
+const _videoExts = {
+  '.mp4',
+  '.mov',
+  '.avi',
+  '.mkv',
+  '.wmv',
+  '.webm',
+  '.m4v',
+  '.flv',
+  '.mts',   // MPEG Transport Stream（摄像机常用）
+  '.3gp',
+};
+
 // ─────────────────────────────────────────────
 // 数据模型
 // ─────────────────────────────────────────────
@@ -48,6 +61,7 @@ enum ScanPhase {
   reconciling, // 正在对账（标记磁盘已删除的文件）
   rebuildingIndex, // 正在重建时间轴索引
   generatingThumbnails, // 正在补生成缩略图
+  generatingVideoCovers, // 正在生成视频封面（Phase B）
 }
 
 class ScanProgress {
@@ -245,13 +259,13 @@ class MediaScanner {
       debugPrint('⚠️ 预加载失败，将回退到逐条查询: $e');
     }
 
-    // 收集所有图片文件
+    // 收集所有图片与视频文件
     final files = <File>[];
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
       if (controller?.shouldStop() ?? false) break;
       if (entity is File) {
         final ext = p.extension(entity.path).toLowerCase();
-        if (_imageExts.contains(ext)) {
+        if (_imageExts.contains(ext) || _videoExts.contains(ext)) {
           files.add(entity);
         }
       }
@@ -262,7 +276,11 @@ class MediaScanner {
       return;
     }
 
-    debugPrint('📁 找到 ${files.length} 个图片文件');
+    final imageCount = files.where((f) =>
+        _imageExts.contains(p.extension(f.path).toLowerCase())).length;
+    final videoCount = files.length - imageCount;
+    debugPrint('📁 找到 ${files.length} 个媒体文件'
+        '（图片 $imageCount，视频 $videoCount）');
 
     int processedCount = 0;
     int added = 0;
@@ -350,6 +368,20 @@ class MediaScanner {
       await _performReconciliation(folderPath, files.length, controller);
     }
 
+    // Phase B: 视频封面后处理（图片扫完后，统一处理文件夹下缺封面的视频）
+    if (!(controller?.shouldStop() ?? false)) {
+      yield ScanProgress(
+        current: files.length,
+        total: files.length,
+        currentFile: '图片扫描完毕，正在处理视频封面...',
+        added: added,
+        duplicates: duplicates,
+        updated: updated,
+        phase: ScanPhase.generatingVideoCovers,
+      );
+      await _processVideosForFolder(folderPath, controller);
+    }
+
     // 重建时间轴索引表
     if (!(controller?.shouldStop() ?? false)) {
       yield ScanProgress(
@@ -386,6 +418,15 @@ class MediaScanner {
     } catch (e) {
       debugPrint('⚠️ 更新时间轴索引失败（非致命）: $e');
     }
+    // 单文件视频：不走完整文件夹扫描流程，直接补 Phase B 封面
+    if (item.fileType == 'video') {
+      debugPrint('🎬 单文件导入视频，准备提取封面: ${item.fileName}');
+      try {
+        await _processVideosForFolder(p.dirname(filePath), null);
+      } catch (e) {
+        debugPrint('🎬 单文件视频封面处理失败: $e');
+      }
+    }
     return item;
   }
 
@@ -409,6 +450,7 @@ class MediaScanner {
 
     final ext = p.extension(file.path).toLowerCase();
     final isImage = _imageExts.contains(ext);
+    final isVideo = _videoExts.contains(ext);
     final path = file.path;
 
     // 1) 先按 filePath 查
@@ -441,7 +483,7 @@ class MediaScanner {
           MediaItemsCompanion(
             filePath: Value(path),
             fileName: Value(p.basename(path)),
-            fileType: Value('image'),
+            fileType: Value(isVideo ? 'video' : 'image'),
             mimeType: Value(_mimeType(ext)),
             fileSizeBytes: Value(stat.size),
             fileModifiedAt: Value(stat.modified),
@@ -458,11 +500,12 @@ class MediaScanner {
         throw StateError('扫描已停止');
       }
 
+      // 图片：保存 EXIF + 生成缩略图；视频：跳过（Phase B 处理）
       if (isImage) {
         await _extractAndSaveExif(file, existing.id,
             overwrite: forceReindexExif);
       }
-      if (existing.thumbnailPath == null) {
+      if (isImage && existing.thumbnailPath == null) {
         if (controller?.shouldStop() ?? false) {
           throw StateError('扫描已停止');
         }
@@ -477,14 +520,16 @@ class MediaScanner {
 
     // 全新入库
     String? thumbPath;
-    try {
-      if (controller?.shouldStop() ?? false) {
-        throw StateError('扫描已停止');
+    if (isImage) {
+      try {
+        if (controller?.shouldStop() ?? false) {
+          throw StateError('扫描已停止');
+        }
+        thumbPath = await generateThumbnail(
+            file, md5hash.isNotEmpty ? md5hash : path.hashCode.toString());
+      } catch (e) {
+        debugPrint('thumbnail error: $path - $e');
       }
-      thumbPath = await generateThumbnail(
-          file, md5hash.isNotEmpty ? md5hash : path.hashCode.toString());
-    } catch (e) {
-      debugPrint('thumbnail error: $path - $e');
     }
 
     if (controller?.shouldStop() ?? false) {
@@ -494,7 +539,7 @@ class MediaScanner {
     await _db.upsertMediaItem(MediaItemsCompanion.insert(
       filePath: path,
       fileName: p.basename(path),
-      fileType: 'image',
+      fileType: isVideo ? 'video' : 'image',
       mimeType: Value(_mimeType(ext)),
       fileSizeBytes: Value(stat.size),
       fileModifiedAt: Value(stat.modified),
@@ -531,6 +576,7 @@ class MediaScanner {
 
     final ext = p.extension(file.path).toLowerCase();
     final isImage = _imageExts.contains(ext);
+    final isVideo = _videoExts.contains(ext);
     final path = file.path;
     final md5hash = meta.md5hash ?? '';
 
@@ -565,7 +611,7 @@ class MediaScanner {
           MediaItemsCompanion(
             filePath: Value(path),
             fileName: Value(p.basename(path)),
-            fileType: Value('image'),
+            fileType: Value(isVideo ? 'video' : 'image'),
             mimeType: Value(_mimeType(ext)),
             fileSizeBytes: Value(meta.fileSize),
             fileModifiedAt: Value(meta.fileModified ?? DateTime.now()),
@@ -579,13 +625,14 @@ class MediaScanner {
         throw StateError('扫描已停止');
       }
 
-      // 使用 Isolate 预计算的 EXIF 数据（跳过文件读取）
+      // 图片：保存 EXIF；视频：跳过（Phase B 处理）
       if (isImage && meta.exifAttrs != null && meta.exifAttrs!.isNotEmpty) {
         await _saveExifAttrs(meta.exifAttrs!, existing.id,
             overwrite: forceReindexExif);
       }
 
-      if (existing.thumbnailPath == null) {
+      // 图片：生成缩略图；视频：跳过（Phase B 统一生成封面）
+      if (isImage && existing.thumbnailPath == null) {
         if (controller?.shouldStop() ?? false) {
           throw StateError('扫描已停止');
         }
@@ -601,15 +648,18 @@ class MediaScanner {
 
     // 全新入库
     String? thumbPath;
-    try {
-      if (controller?.shouldStop() ?? false) {
-        throw StateError('扫描已停止');
+    if (isImage) {
+      try {
+        if (controller?.shouldStop() ?? false) {
+          throw StateError('扫描已停止');
+        }
+        thumbPath = await _thumbWithSemaphore(
+            file, md5hash.isNotEmpty ? md5hash : path.hashCode.toString());
+      } catch (e) {
+        debugPrint('thumbnail error: $path - $e');
       }
-      thumbPath = await _thumbWithSemaphore(
-          file, md5hash.isNotEmpty ? md5hash : path.hashCode.toString());
-    } catch (e) {
-      debugPrint('thumbnail error: $path - $e');
     }
+    // 视频：缩略图留到 Phase B 统一处理
 
     if (controller?.shouldStop() ?? false) {
       throw StateError('扫描已停止');
@@ -618,7 +668,7 @@ class MediaScanner {
     await _db.upsertMediaItem(MediaItemsCompanion.insert(
       filePath: path,
       fileName: p.basename(path),
-      fileType: 'image',
+      fileType: isVideo ? 'video' : 'image',
       mimeType: Value(_mimeType(ext)),
       fileSizeBytes: Value(meta.fileSize),
       fileModifiedAt: Value(meta.fileModified ?? DateTime.now()),
@@ -638,6 +688,7 @@ class MediaScanner {
       // 更新内存索引，避免后续文件重复查询
       _pathMap[path] = saved;
       if (md5hash.isNotEmpty) _md5Set.add(md5hash);
+      // 图片：保存 EXIF；视频：跳过
       if (isImage && meta.exifAttrs != null) {
         await _saveExifAttrs(meta.exifAttrs!, saved.id);
       }
@@ -717,8 +768,10 @@ class MediaScanner {
         fNumber: Value(attrs['FNumber']),
         exposureTime: Value(attrs['ExposureTime']),
         focalLength: Value(attrs['FocalLength']),
-        imageWidth: Value(int.tryParse(attrs['ExifImageWidth'] ?? '')),
-        imageHeight: Value(int.tryParse(attrs['ExifImageLength'] ?? '')),
+        imageWidth: Value(_parseIntAttr(attrs, 'PixelXDimension') ??
+            _parseIntAttr(attrs, 'ExifImageWidth')),
+        imageHeight: Value(_parseIntAttr(attrs, 'PixelYDimension') ??
+            _parseIntAttr(attrs, 'ExifImageLength')),
         orientation: Value(attrs['Orientation']),
         rawJson: Value(_safeJson(attrs)),
       ));
@@ -842,14 +895,23 @@ class MediaScanner {
   }
 
   /// 补全所有缺失的缩略图（全库对账时调用）
-  Future<int> generateMissingThumbnails() async {
+  /// [onProgress] 可选，报告当前进度 (current, total, fileName)
+  Future<int> generateMissingThumbnails({void Function(int current, int total, String fileName)? onProgress}) async {
     final query = _db.select(_db.mediaItems)
       ..where((t) => t.isDeleted.equals(false))
       ..where((t) => t.isMissing.equals(false));
     final items = await query.get();
 
     int count = 0;
+    int index = 0;
     for (final item in items) {
+      index++;
+      onProgress?.call(index, items.length, item.fileName);
+      // 让出足够时间给 Flutter 渲染管线完成一帧
+      if (index % 20 == 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+
       bool needGenerate = false;
       if (item.thumbnailPath == null) {
         needGenerate = true;
@@ -857,19 +919,34 @@ class MediaScanner {
         final thumbFile = File(item.thumbnailPath!);
         needGenerate = !await thumbFile.exists();
       }
+      // 视频：已有封面但缺少视频元数据时，也需要补录
+      if (item.fileType == 'video' && !needGenerate) {
+        final vm = await _db.getVideoMeta(item.id);
+        if (vm == null) needGenerate = true;
+      }
 
-      if (needGenerate) {
-        final file = File(item.filePath);
-        if (await file.exists()) {
-          final mediaId =
-              (item.md5?.isNotEmpty ?? false) ? item.md5! : item.id.toString();
-          final thumbPath = await generateThumbnail(file, mediaId);
-          if (thumbPath != null) {
-            await _db.updateMedia(
-                item.id, MediaItemsCompanion(thumbnailPath: Value(thumbPath)));
-            count++;
-          }
+      if (!needGenerate) continue;
+
+      final file = File(item.filePath);
+      if (!await file.exists()) continue;
+
+      String? thumbPath;
+      if (item.fileType == 'video') {
+        // 视频使用 ffmpeg 提取封面 + 元数据
+        try {
+          thumbPath = await _extractVideoCover(item).timeout(const Duration(seconds: 30));
+        } catch (e) {
+          debugPrint('🎬 全库补视频信息失败: ${item.fileName} - $e');
         }
+      } else {
+        // 图片用原有缩略图生成器
+        final mediaId = (item.md5?.isNotEmpty ?? false) ? item.md5! : item.id.toString();
+        thumbPath = await generateThumbnail(file, mediaId);
+      }
+      if (thumbPath != null) {
+        await _db.updateMedia(
+            item.id, MediaItemsCompanion(thumbnailPath: Value(thumbPath)));
+        count++;
       }
     }
     return count;
@@ -880,7 +957,7 @@ class MediaScanner {
   // ─────────────────────────────────────────────
 
   /// 全库重新分析区域
-  Future<int> reAnalyzeAllRegions() async {
+  Future<int> reAnalyzeAllRegions({void Function(int current, int total)? onProgress}) async {
     await RegionResolver.instance.load();
     return _db.reAnalyzeRegions((lat, lng) async {
       final info = RegionResolver.instance.resolve(lat, lng);
@@ -899,7 +976,7 @@ class MediaScanner {
         district: info.district,
         cityName: info.city,
       );
-    });
+    }, onProgress: onProgress);
   }
 
   // ─────────────────────────────────────────────
@@ -954,21 +1031,230 @@ class MediaScanner {
     }
   }
 
+  int? _parseIntAttr(Map<String, String> attrs, String key) {
+    final v = attrs[key];
+    if (v == null || v.isEmpty) return null;
+    return int.tryParse(v);
+  }
+
   String _mimeType(String ext) {
     const map = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.webp': 'image/webp',
-      '.gif': 'image/gif',
-      '.bmp': 'image/bmp',
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.png': 'image/png', '.webp': 'image/webp',
+      '.gif': 'image/gif', '.bmp': 'image/bmp',
       '.heic': 'image/heic',
+      '.mp4': 'video/mp4', '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo', '.mkv': 'video/x-matroska',
+      '.wmv': 'video/x-ms-wmv', '.webm': 'video/webm',
+      '.m4v': 'video/x-m4v', '.flv': 'video/x-flv',
+      '.mts': 'video/mp2t',
+      '.3gp': 'video/3gpp',
     };
     return map[ext] ?? 'application/octet-stream';
   }
 
   bool _shouldAbort(ScanController? controller) {
     return controller?.shouldStop() ?? false;
+  }
+
+  /// Phase B: 扫描后处理文件夹下的视频封面
+  Future<void> _processVideosForFolder(
+      String folderPath, ScanController? controller) async {
+    debugPrint('🎬 ===== _processVideosForFolder START: $folderPath =====');
+    final videos = await _db.getVideosNeedingCover(folderPath);
+    debugPrint('🎬 需要封面的视频数量: ${videos.length}');
+    if (videos.isEmpty) {
+      debugPrint('🎬 ===== 无视频需处理，END =====');
+      return;
+    }
+
+    // 检查 ffmpeg 是否可用
+    final ffmpegPath = _findFfmpeg();
+    final ffprobePath = _findFfprobe();
+    debugPrint('🎬 ffmpeg 解析路径: $ffmpegPath');
+    debugPrint('🎬 ffprobe 解析路径: $ffprobePath');
+    final bool hasFfmpeg = File(ffmpegPath).existsSync() || ffmpegPath == 'ffmpeg';
+    final bool hasFfprobe = File(ffprobePath).existsSync() || ffprobePath == 'ffprobe';
+    if (!hasFfmpeg || !hasFfprobe) {
+      debugPrint('⚠️ 未找到 ffmpeg / ffprobe，视频封面和元数据将跳过。');
+      debugPrint('   ffmpeg 路径: $ffmpegPath (${hasFfmpeg ? "可用" : "不可用"})');
+      debugPrint('   ffprobe 路径: $ffprobePath (${hasFfprobe ? "可用" : "不可用"})');
+      debugPrint('   已将 ffmpeg 放到项目根目录 ffmpeg\\bin\\ 下？');
+      debugPrint('   运行: .\\download_ffmpeg_dev.ps1');
+      return;
+    }
+
+    debugPrint('🎬 开始处理 ${videos.length} 个视频封面...');
+
+    for (var i = 0; i < videos.length; i++) {
+      if (_shouldAbort(controller)) break;
+      await controller?.checkPause();
+      if (_shouldAbort(controller)) break;
+
+      final video = videos[i];
+
+      try {
+        final coverPath =
+            await _extractVideoCover(video).timeout(const Duration(seconds: 30));
+        if (coverPath != null) {
+          await _db.updateMedia(video.id,
+              MediaItemsCompanion(thumbnailPath: Value(coverPath)));
+        } else {
+          debugPrint('🎬 跳过（无封面）: ${video.fileName}');
+        }
+      } catch (e) {
+        debugPrint('🎬 视频处理失败: ${video.fileName} - $e');
+      }
+    }
+
+    debugPrint('🎬 视频封面处理完成');
+    debugPrint('🎬 ===== _processVideosForFolder END =====');
+  }
+
+  /// 提取视频首帧封面 + 元数据（当前: Dart ffmpeg CLI，V4 替换为 Rust）
+  Future<String?> _extractVideoCover(MediaItem video) async {
+    // TODO: V4 替换为 Rust process_video_files
+    try {
+      final thumbPath = PathHelper.instance.generateThumbnailPath(
+          video.id.toString(), '.jpg');
+      final ffmpegExe = _findFfmpeg();
+
+      // 1. 提取封面帧
+      final result = await Process.run(ffmpegExe, [
+        '-y',
+        '-i', video.filePath,
+        '-vframes', '1',
+        '-q:v', '3',
+        '-vf', 'scale=300:-1',
+        thumbPath,
+      ]);
+
+      if (result.exitCode != 0 || !File(thumbPath).existsSync()) {
+        debugPrint('🎬 ffmpeg 封面提取失败: ${result.stderr}');
+        return null;
+      }
+
+      // 2. 提取元数据（ffprobe）
+      await _extractVideoMeta(video);
+
+      return thumbPath;
+    } catch (e) {
+      debugPrint('🎬 ffmpeg not available: $e');
+      return null;
+    }
+  }
+
+  /// 使用 ffprobe 提取视频元数据并写入 VideoMetas 表
+  Future<void> _extractVideoMeta(MediaItem video) async {
+    try {
+      final ffprobeExe = _findFfprobe();
+      debugPrint('🎬 ffprobe 开始: ${video.fileName}');
+      final result = await Process.run(ffprobeExe, [
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries',
+        'stream=codec_name,width,height,bit_rate',
+        '-of', 'csv=p=0',
+        video.filePath,
+      ]);
+
+      debugPrint('🎬 ffprobe stdout: ${result.stdout}');
+      debugPrint('🎬 ffprobe stderr: ${result.stderr}');
+      debugPrint('🎬 ffprobe exit: ${result.exitCode}');
+
+      if (result.exitCode != 0) {
+        debugPrint('🎬 ffprobe 退出码非 0，跳过元数据');
+        return;
+      }
+
+      // ffprobe csv 固定顺序: codec_name, width, height, bit_rate
+      final fields = (result.stdout as String).trim().split(',');
+      debugPrint('🎬 ffprobe 字段: $fields');
+      if (fields.length < 3) {
+        debugPrint('🎬 ffprobe 字段不足，跳过元数据');
+        return;
+      }
+
+      final codec = fields[0].trim();
+      final width = int.tryParse(fields[1].trim()) ?? 0;
+      final height = int.tryParse(fields[2].trim()) ?? 0;
+      final bitrate = (fields.length >= 4)
+          ? (int.tryParse(fields[3].trim()) ?? 0)
+          : 0;
+      debugPrint('🎬 解析: width=$width height=$height codec=$codec bitrate=$bitrate');
+
+      // duration 单独查询（更可靠）
+      double duration = 0;
+      try {
+        final durResult = await Process.run(ffprobeExe, [
+          '-v', 'error',
+          '-show_entries', 'format=duration',
+          '-of', 'csv=p=0',
+          video.filePath,
+        ]);
+        if (durResult.exitCode == 0) {
+          duration = double.tryParse((durResult.stdout as String).trim()) ?? 0;
+        }
+      } catch (_) {}
+      debugPrint('🎬 duration=$duration');
+
+      if (width > 0 && height > 0) {
+        await _db.upsertVideoMeta(video.id,
+            durationSec: duration,
+            width: width,
+            height: height,
+            codec: codec,
+            bitrate: bitrate);
+        debugPrint('🎬 已写入 VideoMetas: id=${video.id}');
+      } else {
+        debugPrint('🎬 分辨率无效，未写入 VideoMetas');
+      }
+    } catch (e) {
+      debugPrint('🎬 ffprobe 元数据提取异常: $e');
+    }
+  }
+
+  /// 查找 ffmpeg：exe 同目录 → 向上逐层查找 → 系统 PATH
+  String _findFfmpeg() {
+    final exeDir = p.dirname(Platform.resolvedExecutable);
+    debugPrint('🔍 查找 ffmpeg... exe目录: $exeDir');
+    // 1. exe 同目录下的便携版（发布包）
+    final bundled = p.join(exeDir, 'ffmpeg', 'bin', 'ffmpeg.exe');
+    if (File(bundled).existsSync()) {
+      debugPrint('🔍 找到 (同目录): $bundled');
+      return bundled;
+    }
+    // 2. 向上逐层查找（开发调试：项目根目录 ffmpeg/）
+    var dir = exeDir;
+    for (var i = 0; i < 8; i++) {
+      final dev = p.join(dir, 'ffmpeg', 'bin', 'ffmpeg.exe');
+      if (File(dev).existsSync()) {
+        debugPrint('🔍 找到 (向上 $i 层): $dev');
+        return dev;
+      }
+      final parent = p.dirname(dir);
+      if (parent == dir) break;
+      dir = parent;
+    }
+    // 3. 系统 PATH
+    debugPrint('🔍 未在目录树中找到，回退系统 PATH');
+    return 'ffmpeg';
+  }
+
+  /// 查找 ffprobe：同上
+  String _findFfprobe() {
+    final exeDir = p.dirname(Platform.resolvedExecutable);
+    final bundled = p.join(exeDir, 'ffmpeg', 'bin', 'ffprobe.exe');
+    if (File(bundled).existsSync()) return bundled;
+    var dir = exeDir;
+    for (var i = 0; i < 8; i++) {
+      final dev = p.join(dir, 'ffmpeg', 'bin', 'ffprobe.exe');
+      if (File(dev).existsSync()) return dev;
+      final parent = p.dirname(dir);
+      if (parent == dir) break;
+      dir = parent;
+    }
+    return 'ffprobe';
   }
 
   /// 在线 geocoding 兜底
@@ -1074,5 +1360,5 @@ img.Image? _decodeImageIsolate(Uint8List bytes) {
 
 void debugPrint(String msg) {
   // ignore: avoid_print
-  print('[PixelVault] $msg');
+  print('[PicGuide] $msg');
 }

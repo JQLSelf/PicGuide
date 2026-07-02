@@ -28,7 +28,7 @@ function Invoke-DownloadWithProgress {
 
     $req = [System.Net.HttpWebRequest]::Create($Url)
     $req.Method = "GET"
-    $req.UserAgent = "PowerShell PixelVault Setup"
+    $req.UserAgent = "PowerShell PicGuide Setup"
     $req.AllowAutoRedirect = $true
 
     try {
@@ -90,7 +90,7 @@ function Invoke-DownloadWithProgress {
 # 第 1 步: 检查 PowerShell 执行策略
 # ============================================================
 Write-Color "==============================================" "Cyan"
-Write-Color "  PixelVault - Flutter 环境配置脚本"         "Cyan"
+Write-Color "  PicGuide - Flutter 环境配置脚本"         "Cyan"
 Write-Color "==============================================" "Cyan"
 Write-Color "目标 Flutter 版本: $FlutterVersion"
 Write-Color "安装目录: $InstallDir"
@@ -291,7 +291,7 @@ Write-Color "  OK Windows 桌面支持已启用" "Green"
 # ============================================================
 # 第 8 步: 为项目安装依赖
 # ============================================================
-Write-Color "`n[8/8] 为 PixelVault 项目安装依赖..." "Yellow"
+Write-Color "`n[8/8] 为 PicGuide 项目安装依赖..." "Yellow"
 
 $projectDir = Split-Path $MyInvocation.MyCommand.Path
 Set-Location $projectDir

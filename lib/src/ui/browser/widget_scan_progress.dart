@@ -404,6 +404,8 @@ class _ScanProgressPanelState extends State<ScanProgressPanel> {
         return '更新时间轴索引中';
       case ScanPhase.generatingThumbnails:
         return '生成缩略图中';
+      case ScanPhase.generatingVideoCovers:
+        return '生成视频封面中';
     }
   }
 }

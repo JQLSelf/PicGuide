@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# build_release.ps1 - PixelVault Windows 一键打包脚本
+# build_release.ps1 - PicGuide Windows 一键打包脚本
 # ============================================================
 #
 # 用法（在项目根目录执行）：
@@ -13,6 +13,7 @@
 #   -SkipInnoSetup          不调用 Inno Setup（即便检测到也不调用）
 #   -FlutterExe "flutter"   指定 flutter 可执行路径
 #   -InnoSetupExe "C:\...\ISCC.exe"  指定 Inno Setup 编译器
+#   -FfmpegPath "D:\ffmpeg"          指定本地 ffmpeg 目录或 ffmpeg.exe 路径
 #
 # 前置：
 #   1. Flutter >= 3.16，配置了 Windows 桌面（flutter config --enable-windows-desktop）
@@ -27,7 +28,8 @@ param(
     [switch]$SkipZip,
     [switch]$SkipInnoSetup,
     [string]$FlutterExe = "flutter",
-    [string]$InnoSetupExe = ""
+    [string]$InnoSetupExe = "",
+    [string]$FfmpegPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +47,286 @@ function Write-Section([string]$title) {
 function Write-OK([string]$msg)   { Write-Host "  ✔ $msg" -ForegroundColor Green }
 function Write-Warn([string]$msg) { Write-Host "  ⚠ $msg" -ForegroundColor Yellow }
 function Write-Err([string]$msg)  { Write-Host "  ✖ $msg" -ForegroundColor Red }
+
+# 带进度条 + 速度检测的下载函数
+# 优先使用 aria2c 多线程下载（16 线程），不可用时回退到 WebClient
+# 若平均速度低于 MinSpeedKBps 持续超过 CheckAfterSec 秒，自动中断切换源
+function _downloadWithProgress {
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [int]$TimeoutSec = 60,
+        [int]$MinSpeedKBps = 30,
+        [int]$CheckAfterSec = 10
+    )
+
+    # ── 优先 aria2c（16 线程，自带进度条） ──
+    $aria2 = Get-Command aria2c -ErrorAction SilentlyContinue
+    if ($aria2) {
+        Write-Host "  使用 aria2c 多线程下载 (16 线程)" -ForegroundColor DarkGray
+        # 清理所有残留（上次失败可能留下 .zip / .1.zip / .zip.aria2）
+        $outDir = Split-Path $OutFile
+        $outName = Split-Path $OutFile -Leaf
+        Get-ChildItem $outDir -Filter "$outName*" | Remove-Item -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300  # 等文件句柄释放
+
+        $aria2Proc = Start-Process -FilePath $aria2.Source -ArgumentList @(
+            "-x16", "-s16", "-k1M",
+            "--max-overall-download-limit=0",
+            "--console-log-level=notice",
+            "--summary-interval=0",
+            "--connect-timeout=10",
+            "--max-connection-per-server=16",
+            "--min-split-size=1M",
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
+            "-d", $outDir,
+            "-o", $outName,
+            $Url
+        ) -Wait -NoNewWindow -PassThru
+
+        Start-Sleep -Milliseconds 500
+
+        # aria2c 自动改名了？把 .1.zip 移回来
+        $renamedFile = Join-Path $outDir "$outName.1"
+        if ((Test-Path $renamedFile) -and -not (Test-Path $OutFile)) {
+            Move-Item $renamedFile $OutFile -Force
+        }
+
+        if ($aria2Proc.ExitCode -eq 0 -and (Test-Path $OutFile)) {
+            $finalSize = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
+            Write-Host "  aria2c 完成: $finalSize MB"
+            return $true
+        }
+        Write-Warn "  aria2c 失败 (exit=$($aria2Proc.ExitCode))，回退 WebClient"
+        Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+    }
+
+    # ── 回退 WebClient（Job + 速度检测） ──
+    # 确保目标文件不存在（WebClient.DownloadFile 不会自动覆盖）
+    Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    $job = Start-Job -ScriptBlock {
+        param($u, $o)
+        $wc = New-Object System.Net.WebClient
+        try { $wc.DownloadFile($u, $o) } finally { $wc.Dispose() }
+    } -ArgumentList $Url, $OutFile
+
+    try {
+        while ($job.State -eq 'Running') {
+            Start-Sleep -Milliseconds 800
+            $elapsed = $sw.Elapsed.TotalSeconds
+
+            $currentBytes = if (Test-Path $OutFile) {
+                (Get-Item $OutFile -ErrorAction SilentlyContinue).Length
+            } else { 0 }
+
+            $speedKBps = if ($elapsed -gt 0) { [math]::Round($currentBytes / $elapsed / 1KB, 1) } else { 0 }
+            $sizeMB    = [math]::Round($currentBytes / 1MB, 1)
+
+            $pct = [math]::Min(100, ($elapsed / $TimeoutSec) * 100)
+            Write-Progress -Activity "下载 ffmpeg" `
+                -Status "$sizeMB MB | $speedKBps KB/s | $([math]::Round($elapsed))s" `
+                -PercentComplete $pct
+
+            # 速度检测：N 秒后平均速度仍低于阈值 → 中断
+            if ($elapsed -gt $CheckAfterSec -and $currentBytes -lt ($MinSpeedKBps * $elapsed * 1KB)) {
+                Write-Progress -Activity "下载 ffmpeg" -Completed
+                Stop-Job $job -ErrorAction SilentlyContinue
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+                throw "速度过慢 ($speedKBps KB/s < $MinSpeedKBps KB/s)，自动切源"
+            }
+
+            if ($elapsed -gt $TimeoutSec) {
+                Write-Progress -Activity "下载 ffmpeg" -Completed
+                Stop-Job $job -ErrorAction SilentlyContinue
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+                throw "超时 ($TimeoutSec s)"
+            }
+        }
+
+        Write-Progress -Activity "下载 ffmpeg" -Completed
+
+        $result = Receive-Job $job -ErrorAction SilentlyContinue
+    } finally {
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
+    }
+
+    $sw.Stop()
+    $totalSec = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+    if (Test-Path $OutFile) {
+        $finalSize = (Get-Item $OutFile).Length
+        $avgSpeed = [math]::Round($finalSize / $totalSec / 1KB, 1)
+        Write-Host "    $([math]::Round($finalSize/1MB,1)) MB | $avgSpeed KB/s | $totalSec s"
+        return $true
+    }
+    return $false
+}
+
+function _copyOrDownloadFfmpeg {
+    param([string]$DestDir, [string]$FfmpegPath)
+    $destExe = Join-Path $DestDir "bin\ffmpeg.exe"
+    $destProbe = Join-Path $DestDir "bin\ffprobe.exe"
+
+    # 1. 用户指定了本地路径 → 直接拷贝
+    if ($FfmpegPath -and (Test-Path $FfmpegPath)) {
+        if ((Get-Item $FfmpegPath) -is [System.IO.DirectoryInfo]) {
+            Copy-Item $FfmpegPath $DestDir -Recurse -Force
+        } elseif ($FfmpegPath -like "*ffmpeg.exe") {
+            New-Item -ItemType Directory -Path (Join-Path $DestDir "bin") -Force | Out-Null
+            Copy-Item $FfmpegPath $destExe -Force
+            $probePath = Join-Path (Split-Path $FfmpegPath) "ffprobe.exe"
+            if (Test-Path $probePath) { Copy-Item $probePath $destProbe -Force }
+        }
+        if ((Test-Path $destExe) -and (Test-Path $destProbe)) {
+            Write-OK "ffmpeg 已从本地拷贝: $destExe"
+            return
+        }
+        Write-Warn "指定的 ffmpeg 路径无效，尝试其他方式..."
+    }
+
+    # 2. 项目根目录 ffmpeg\bin\ 自动检测（开发者一次性下好，后续零下载）
+    $vendorFfmpeg = Join-Path $PSScriptRoot "ffmpeg\bin\ffmpeg.exe"
+    $vendorFfprobe = Join-Path $PSScriptRoot "ffmpeg\bin\ffprobe.exe"
+    if ((Test-Path $vendorFfmpeg) -and (Test-Path $vendorFfprobe)) {
+        Write-Warn "检测到项目根目录 ffmpeg\，直接拷贝"
+        Copy-Item (Join-Path $PSScriptRoot "ffmpeg") $DestDir -Recurse -Force
+        if ((Test-Path $destExe) -and (Test-Path $destProbe)) {
+            Write-OK "ffmpeg 已从项目根目录拷贝"
+            return
+        }
+    }
+
+    # 3. 从系统 PATH 或常见路径找 ffmpeg
+    $sysFfmpeg = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
+    if ($sysFfmpeg) {
+        $srcDir = Split-Path $sysFfmpeg
+        Write-Warn "从系统 PATH 获取 ffmpeg: $srcDir"
+        Copy-Item $srcDir $DestDir -Recurse -Force
+        Rename-Item (Join-Path $DestDir (Split-Path $srcDir -Leaf)) (Join-Path $DestDir "bin") -Force
+        New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+        if ((Test-Path $destExe) -and (Test-Path $destProbe)) {
+            Write-OK "ffmpeg 已从系统 PATH 拷贝"
+            return
+        }
+    }
+
+    # 3.5 清理 Temp 里之前失败的残留（避免 aria2c 自动改名 .1.zip 等冲突）
+    Get-ChildItem $env:TEMP -Filter "ffmpeg-pixelvault*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
+    # 4. 在线下载（多源轮询 + 进度条 + 慢速自动切源）
+    #    直连源 10s 内平均速度 < 30KB/s 就放弃，直接走代理
+    $sourceGroups = @(
+        @{
+            Label        = "直连源"
+            Timeout      = 15
+            MinSpeedKBps = 30
+            Urls         = @(
+                "https://github.com/GyanD/codexffmpeg/releases/latest/download/ffmpeg-release-essentials.zip",
+                "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+            )
+        },
+        @{
+            Label        = "ghproxy 镜像"
+            Timeout      = 120
+            MinSpeedKBps = 10
+            Urls         = @(
+                "https://ghproxy.com/https://github.com/GyanD/codexffmpeg/releases/latest/download/ffmpeg-release-essentials.zip",
+                "https://ghproxy.net/https://github.com/GyanD/codexffmpeg/releases/latest/download/ffmpeg-release-essentials.zip",
+                "https://ghproxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
+                "https://ghproxy.net/https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+            )
+        },
+        @{
+            Label        = "备用镜像"
+            Timeout      = 120
+            MinSpeedKBps = 10
+            Urls         = @(
+                "https://gh-proxy.com/https://github.com/GyanD/codexffmpeg/releases/latest/download/ffmpeg-release-essentials.zip",
+                "https://github.akams.cn/https://github.com/GyanD/codexffmpeg/releases/latest/download/ffmpeg-release-essentials.zip",
+                "https://gh-proxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
+                "https://github.akams.cn/https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+            )
+        }
+    )
+
+    $ffmpegZip = Join-Path $env:TEMP "ffmpeg-pixelvault.zip"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    foreach ($group in $sourceGroups) {
+        Write-Warn "--- $($group.Label) ($($group.Urls.Count) 个源, 慢速阈值 $($group.MinSpeedKBps) KB/s) ---"
+        foreach ($url in $group.Urls) {
+            Remove-Item $ffmpegZip -Force -ErrorAction SilentlyContinue
+            Write-Warn "  $url"
+            try {
+                $ok = _downloadWithProgress -Url $url -OutFile $ffmpegZip `
+                    -TimeoutSec $group.Timeout -MinSpeedKBps $group.MinSpeedKBps -CheckAfterSec 8
+                if (-not $ok) { Write-Warn "  下载未完成，尝试下一个源"; continue }
+
+                # 解压到独立临时目录（避免 Expand-Archive 在目标目录上的兼容问题）
+                $unzipTmp = Join-Path $env:TEMP "ffmpeg-extract"
+                Remove-Item $unzipTmp -Recurse -Force -ErrorAction SilentlyContinue
+                $unzipOk = $false
+                for ($retry = 0; $retry -lt 3; $retry++) {
+                    try {
+                        [System.IO.Compression.ZipFile]::ExtractToDirectory($ffmpegZip, $unzipTmp)
+                        $unzipOk = $true; break
+                    } catch {
+                        if ($retry -lt 2) {
+                            Write-Warn "  解压重试 $($retry+1)/3: $($_.Exception.Message)"
+                            [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers()
+                            Start-Sleep -Milliseconds 1000
+                        } else {
+                            Remove-Item $unzipTmp -Recurse -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                    }
+                }
+                if (-not $unzipOk) { Write-Warn "  解压失败，尝试下一个源"; continue }
+
+                # 找到 bin/ffmpeg.exe（无论嵌套几层）
+                $foundFfmpeg  = Get-ChildItem $unzipTmp -Recurse -Filter "ffmpeg.exe"  -ErrorAction SilentlyContinue | Select-Object -First 1
+                $foundFfprobe = Get-ChildItem $unzipTmp -Recurse -Filter "ffprobe.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($foundFfmpeg -and $foundFfprobe) {
+                    $targetBin = Join-Path $DestDir "bin"
+                    New-Item -ItemType Directory -Path $targetBin -Force | Out-Null
+                    Copy-Item $foundFfmpeg.FullName  $targetBin -Force
+                    Copy-Item $foundFfprobe.FullName $targetBin -Force
+                    Write-Host "  提取 ffmpeg.exe ($([math]::Round($foundFfmpeg.Length/1MB,1)) MB) + ffprobe.exe"
+                } else {
+                    Write-Warn "  zip 内未找到 ffmpeg.exe/ffprobe.exe，尝试下一个源"
+                    Remove-Item $unzipTmp -Recurse -Force -ErrorAction SilentlyContinue
+                    Remove-Item $ffmpegZip -Force -ErrorAction SilentlyContinue
+                    continue
+                }
+
+                # 清理临时文件
+                Remove-Item $unzipTmp -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item $ffmpegZip -Force -ErrorAction SilentlyContinue
+                if ((Test-Path $destExe) -and (Test-Path $destProbe)) {
+                    Write-OK "ffmpeg 就绪: $destExe"
+                    # 自动缓存到项目根目录（后续打包跳过下载）
+                    $cacheDir = Join-Path $PSScriptRoot "ffmpeg\bin"
+                    $cacheExe = Join-Path $cacheDir "ffmpeg.exe"
+                    if (-not (Test-Path $cacheExe)) {
+                        New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+                        Copy-Item $destExe $cacheDir -Force
+                        Copy-Item $destProbe $cacheDir -Force
+                        Write-OK "已缓存到项目根目录 ffmpeg\（下次跳过下载）"
+                    }
+                    return
+                }
+                Write-Warn "  解压后文件结构不符，尝试下一个源"
+            } catch {
+                Write-Warn "  失败: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    Remove-Item $ffmpegZip -Force -ErrorAction SilentlyContinue
+    Write-Warn "所有下载源均不可用，请手动准备 ffmpeg 或使用 -FfmpegPath 参数指定路径"
+}
 
 function Get-FormattedSize([int64]$bytes) {
     if ($bytes -ge 1GB) { return ("{0:N2} GB" -f ($bytes / 1GB)) }
@@ -196,7 +478,7 @@ $dataDir       = Join-Path $projectRoot "data"
 $issFile       = Join-Path $projectRoot "installer.iss"
 $outputAbsDir  = Join-Path $projectRoot $OutputDir
 $timestamp     = Get-Date -Format "yyyyMMdd-HHmmss"
-$baseName      = "PixelVault-$Version-win-x64"
+$baseName      = "PicGuide-$Version-win-x64"
 $zipPath       = Join-Path $outputAbsDir "$baseName.zip"
 $checksumPath  = Join-Path $outputAbsDir "$baseName.zip.sha256.txt"
 
@@ -245,13 +527,36 @@ Write-OK "Rust 原生库: $rustTargetDll ($((Get-Item $rustTargetDll).Length/1KB
 
 if (-not $SkipBuild) {
     Write-Section "3/6  编译 Release"
+
+    # 检查 media_kit 预下载依赖
+    $vendorMpvDir = Join-Path $projectRoot "vendor\mpv"
+    $vendorFiles = @(
+        "mpv-dev-x86_64-20230924-git-652a1dd.7z",
+        "ANGLE.7z"
+    )
+    $missingVendor = @()
+    foreach ($f in $vendorFiles) {
+        if (-not (Test-Path (Join-Path $vendorMpvDir $f))) {
+            $missingVendor += $f
+        }
+    }
+    if ($missingVendor.Count -gt 0) {
+        Write-Warn "缺少 media_kit 预下载依赖: $($missingVendor -join ', ')"
+        Write-Warn "请先运行: .\vendor\mpv\download.ps1"
+        Write-Warn "或手动下载上述文件放入 vendor\mpv\ 目录"
+        Write-Warn "详见 vendor\mpv\download.ps1 中的下载地址"
+        throw "缺少预下载依赖，无法继续编译"
+    }
+    Write-OK "media_kit 预下载依赖已就绪"
+
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    # 清理上次产物（避免旧 dll 残留）
-    $buildRoot = Join-Path $projectRoot "build\windows"
-    if (Test-Path $buildRoot) {
-        Write-Warn "清理 build\windows\"
-        Remove-Item $buildRoot -Recurse -Force
+    # 仅清理 Release 产物（保留 CMake 缓存 / sqlite3 编译 / mpv 解压）
+    # 不再全量删除 build\windows\，避免每次重下 sqlite3 源码 + 重解压 mpv
+    $releaseOutputDir = Join-Path $projectRoot "build\windows\x64\runner\Release"
+    if (Test-Path $releaseOutputDir) {
+        Write-Warn "清理 Release 产物（保留 CMake 缓存 & 依赖）"
+        Remove-Item $releaseOutputDir -Recurse -Force
     }
 
     & $FlutterExe build windows --release
@@ -285,10 +590,24 @@ if (Test-Path $manualSrc) {
     Write-Warn "未找到 $manualSrc，跳过（应用启动时也会自动生成）"
 }
 
-# ────────── 5. 生成绿色版 zip ──────────
+# ────────── 5. 便携版 ffmpeg ──────────
+
+Write-Section "5/7  准备 ffmpeg 便携版"
+$ffmpegDir = Join-Path $releaseDir "ffmpeg"
+$ffmpegExe = Join-Path $ffmpegDir "bin\ffmpeg.exe"
+if (Test-Path $ffmpegExe) {
+    Write-OK "ffmpeg 已缓存: $ffmpegExe"
+} else {
+    _copyOrDownloadFfmpeg -DestDir $ffmpegDir -FfmpegPath $FfmpegPath
+    if (-not (Test-Path $ffmpegExe)) {
+        Write-Warn "ffmpeg 未就绪，视频封面将依赖目标机器的系统 ffmpeg"
+    }
+}
+
+# ────────── 6. 生成绿色版 zip ──────────
 
 if (-not $SkipZip) {
-    Write-Section "5/6  打包绿色版 zip"
+    Write-Section "6/7  打包绿色版 zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -316,7 +635,7 @@ if (-not $SkipZip) {
 # ────────── 6. Inno Setup 安装程序 ──────────
 
 if ($useInnoSetup) {
-    Write-Section "6/6  生成 Inno Setup 安装程序"
+    Write-Section "7/7  生成 Inno Setup 安装程序"
 
     # 生成临时 .iss（也可让用户自建固定模板）
     $issContent = @"
@@ -326,13 +645,13 @@ if ($useInnoSetup) {
 ; ============================================================
 [Setup]
 AppId={{A8C2E0F1-3B4D-4E5F-9A0B-1C2D3E4F5A6B}
-AppName=PixelVault
+AppName=PicGuide
 AppVersion=$Version
-AppPublisher=PixelVault
+AppPublisher=PicGuide
 AppPublisherURL=https://example.com
 AppSupportURL=https://example.com
-DefaultDirName={autopf}\PixelVault
-DefaultGroupName=PixelVault
+DefaultDirName={autopf}\PicGuide
+DefaultGroupName=PicGuide
 AllowNoIcons=yes
 OutputDir=$($outputAbsDir -replace '\\','\\')
 OutputBaseFilename=$baseName-Setup
@@ -347,12 +666,12 @@ Source: "$($releaseDir -replace '\\','\\')\*"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autodesktop}\PixelVault"; Filename: "{app}\pixelvault.exe"
-Name: "{group}\PixelVault 使用手册"; Filename: "{app}\USER_MANUAL.md"
-Name: "{group}\卸载 PixelVault"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\PicGuide"; Filename: "{app}\pixelvault.exe"
+Name: "{group}\PicGuide 使用手册"; Filename: "{app}\USER_MANUAL.md"
+Name: "{group}\卸载 PicGuide"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\pixelvault.exe"; Description: "{cm:LaunchProgram,PixelVault}"; \
+Filename: "{app}\pixelvault.exe"; Description: "{cm:LaunchProgram,PicGuide}"; \
     Flags: nowait postinstall skipifsilent
 "@
 
@@ -379,7 +698,7 @@ Filename: "{app}\pixelvault.exe"; Description: "{cm:LaunchProgram,PixelVault}"; 
         Write-Warn "未找到安装程序，Inno Setup 可能输出了非预期位置"
     }
 } else {
-    Write-Section "6/6  Inno Setup 安装程序（跳过）"
+    Write-Section "7/7  Inno Setup 安装程序（跳过）"
 }
 
 # ────────── 汇总 ──────────

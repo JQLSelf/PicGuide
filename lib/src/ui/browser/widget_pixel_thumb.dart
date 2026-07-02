@@ -224,18 +224,42 @@ class _PixelThumbState extends State<PixelThumb> {
 
   Widget _buildVideo() {
     final tp = widget.item.thumbnailPath;
-    if (tp != null && File(tp).existsSync()) {
-      return Image.file(
-        File(tp),
-        fit: BoxFit.cover,
-        // 视频缩略图原本就是原图大小的截帧，full 模式没必要切原文件
-        cacheWidth:
-            _quality == PixelThumbQuality.full ? kFullCacheWidth : kThumbCacheWidth,
-        gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => _videoFallback(),
-      );
-    }
-    return _videoFallback();
+    final content = (tp != null && File(tp).existsSync())
+        ? Image.file(
+            File(tp),
+            fit: BoxFit.cover,
+            // 视频缩略图原本就是原图大小的截帧，full 模式没必要切原文件
+            cacheWidth: _quality == PixelThumbQuality.full
+                ? kFullCacheWidth
+                : kThumbCacheWidth,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => _videoFallback(),
+          )
+        : _videoFallback();
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        content,
+        // 播放按钮覆盖层（区分视频 / 图片）
+        Positioned.fill(
+          child: Center(
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.45),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _videoFallback() => Container(

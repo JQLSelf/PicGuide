@@ -123,6 +123,18 @@ class MediaDateIndexes extends Table {
       dateTime().withDefault(currentDateAndTime)();
 }
 
+/// 视频元数据表（时长 / 分辨率 / 编码等）
+@DataClassName('VideoMeta')
+class VideoMetas extends Table {
+  IntColumn get mediaItemId =>
+      integer().references(MediaItems, #id, onDelete: KeyAction.cascade)();
+  RealColumn get durationSec => real()(); // 秒
+  IntColumn get width => integer()();
+  IntColumn get height => integer()();
+  TextColumn get codec => text()(); // "h264", "hevc"
+  IntColumn get bitrate => integer()(); // bps
+}
+
 /// 月份桶（用于时间轴侧边栏，YYYY-MM 粒度）
 class MonthlyBucket {
   final String dateKey; // 'YYYY-MM'
@@ -139,12 +151,12 @@ class MonthlyBucket {
 // 数据库类
 // ─────────────────────────────────────────────
 
-@DriftDatabase(tables: [MediaItems, ExifDatas, Tags, MediaTags, FolderScans, MediaDateIndexes])
+@DriftDatabase(tables: [MediaItems, ExifDatas, Tags, MediaTags, FolderScans, MediaDateIndexes, VideoMetas])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -170,6 +182,10 @@ class AppDatabase extends _$AppDatabase {
           // v4 -> v5: 增 mediaTags.active 列
           if (from < 5) {
             await m.addColumn(mediaTags, mediaTags.active);
+          }
+          // v5 -> v6: 增 video_metas 表
+          if (from < 6) {
+            await m.createTable(videoMetas);
           }
         },
       );
@@ -325,6 +341,22 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// 获取指定文件夹下缺缩略图的视频记录（用于扫描 Phase B 后处理）
+  Future<List<MediaItem>> getVideosNeedingCover(String folderPath) async {
+    final normFolder = folderPath.replaceAll('/', '\\');
+    final sep = '\\';
+    final prefix = normFolder.isEmpty ? '' : '$normFolder$sep';
+    final prefixFwd = prefix.replaceAll('\\', '/');
+    return (select(mediaItems)
+          ..where((t) =>
+              t.filePath.like('$prefix%') |
+              t.filePath.like('$prefixFwd%'))
+          ..where((t) => t.isDeleted.equals(false))
+          ..where((t) => t.fileType.equals('video'))
+          ..where((t) => t.thumbnailPath.isNull()))
+        .get();
+  }
+
   /// 获取指定文件夹下直接包含的媒体（不递归子目录）
   ///
   /// 注意：不要用 _escapeLike + escapeChar。详见 getMediaInFolder 注释。
@@ -439,11 +471,18 @@ class AppDatabase extends _$AppDatabase {
       }
     }
 
+    // 批量加载视频元数据
+    final videoMetaRows = await (select(videoMetas)
+          ..where((v) => v.mediaItemId.isIn(ids)))
+        .get();
+    final videoMetaMap = {for (final v in videoMetaRows) v.mediaItemId: v};
+
     // 保持原始顺序返回
     return items.map((item) => MediaItemWithMeta(
           item: item,
           exif: exifMap[item.id],
           tags: mediaTagMap[item.id] ?? [],
+          videoMeta: videoMetaMap[item.id],
         )).toList();
   }
 
@@ -547,6 +586,33 @@ class AppDatabase extends _$AppDatabase {
           ..where((t) => t.mediaItemId.equals(mediaId)))
         .write(const MediaTagsCompanion(active: Value(true)));
   }
+
+  // ── 视频元数据 ──
+
+  /// 写入或更新视频元数据（upsert by mediaItemId）
+  Future<void> upsertVideoMeta(int mediaId,
+      {required double durationSec,
+      required int width,
+      required int height,
+      required String codec,
+      required int bitrate}) async {
+    await into(videoMetas).insertOnConflictUpdate(
+      VideoMetasCompanion.insert(
+        mediaItemId: mediaId,
+        durationSec: durationSec,
+        width: width,
+        height: height,
+        codec: codec,
+        bitrate: bitrate,
+      ),
+    );
+  }
+
+  /// 查询视频元数据
+  Future<VideoMeta?> getVideoMeta(int mediaId) =>
+      (select(videoMetas)
+            ..where((v) => v.mediaItemId.equals(mediaId)))
+          .getSingleOrNull();
 
   Future<List<Tag>> getAllTags() => select(tags).get();
 
@@ -812,12 +878,15 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// 全库对账：检查所有未删除记录，标记 missing
-  Future<int> reconcileAll() async {
+  Future<int> reconcileAll({void Function(int current, int total)? onProgress}) async {
     final rows = await (select(mediaItems)
           ..where((t) => t.isDeleted.equals(false)))
         .get();
     var count = 0;
+    var index = 0;
     for (final r in rows) {
+      index++;
+      onProgress?.call(index, rows.length);
       final exists = await File(r.filePath).exists();
       final wantMissing = !exists;
       if (r.isMissing != wantMissing) {
@@ -845,6 +914,7 @@ class AppDatabase extends _$AppDatabase {
                 })>
             Function(double lat, double lng)
         resolver,
+    {void Function(int current, int total)? onProgress}
   ) async {
     // 只筛选有经纬度且未软删的 EXIF 行
     final rows = await (select(exifDatas).join([
@@ -855,7 +925,10 @@ class AppDatabase extends _$AppDatabase {
           ..where(mediaItems.isDeleted.equals(false)))
         .get();
     var updated = 0;
+    var index = 0;
     for (final row in rows) {
+      index++;
+      onProgress?.call(index, rows.length);
       final exif = row.readTable(exifDatas);
       final lat = exif.latitude;
       final lng = exif.longitude;
@@ -968,10 +1041,12 @@ class MediaItemWithMeta {
   final MediaItem item;
   final ExifData? exif;
   final List<Tag> tags;
+  final VideoMeta? videoMeta;
   const MediaItemWithMeta({
     required this.item,
     required this.exif,
     required this.tags,
+    this.videoMeta,
   });
 }
 

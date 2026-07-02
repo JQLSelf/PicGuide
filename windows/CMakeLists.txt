@@ -53,6 +53,36 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 
+# ============================================================================
+# Pre-vendor media_kit dependencies
+# Place pre-downloaded archives in vendor/mpv/ to skip GitHub downloads.
+# Required files:
+#   mpv-dev-x86_64-20230924-git-652a1dd.7z  (8.38 MB)
+#   ANGLE.7z                                (4.8 MB)
+# Download URLs:
+#   https://github.com/media-kit/libmpv-win32-video-build/releases/download/2023-09-24/mpv-dev-x86_64-20230924-git-652a1dd.7z
+#   https://github.com/alexmercerind/flutter-windows-ANGLE-OpenGL-ES/releases/download/v1.0.1/ANGLE.7z
+# ============================================================================
+set(PV_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/mpv")
+if(EXISTS "${PV_VENDOR_DIR}/mpv-dev-x86_64-20230924-git-652a1dd.7z")
+  configure_file(
+    "${PV_VENDOR_DIR}/mpv-dev-x86_64-20230924-git-652a1dd.7z"
+    "${CMAKE_BINARY_DIR}/mpv-dev-x86_64-20230924-git-652a1dd.7z"
+    COPYONLY
+  )
+  message(STATUS "media_kit: Using pre-vendored mpv binary from vendor/mpv/")
+endif()
+if(EXISTS "${PV_VENDOR_DIR}/ANGLE.7z")
+  configure_file(
+    "${PV_VENDOR_DIR}/ANGLE.7z"
+    "${CMAKE_BINARY_DIR}/ANGLE.7z"
+    COPYONLY
+  )
+  message(STATUS "media_kit: Using pre-vendored ANGLE binary from vendor/mpv/")
+endif()
+# ============================================================================
+
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)

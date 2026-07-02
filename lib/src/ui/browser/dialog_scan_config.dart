@@ -3,6 +3,7 @@
 // 扫描确认弹窗：显示路径、确认开始扫描
 // ============================================================
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// 扫描确认弹窗返回结果
 class ScanConfigResult {
@@ -35,15 +36,22 @@ class ScanConfigDialog extends StatelessWidget {
 
     final isDark = theme.brightness == Brightness.dark;
 
-    return AlertDialog(
-      title: const Text('确认扫描'),
+    return CallbackShortcuts(
+      bindings: {
+        SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.pop(context, ScanConfigResult(confirmed: false)),
+      },
+      child: Focus(
+        autofocus: true,
+        child: AlertDialog(
+          title: const Text('确认扫描'),
       contentPadding: const EdgeInsets.all(20),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '即将扫描以下文件夹中的所有图片：',
+            '即将扫描以下文件夹中的所有图片和视频：',
             style: TextStyle(
               fontSize: 13,
               color: isDark ? Colors.white70 : theme.hintColor,
@@ -51,8 +59,7 @@ class ScanConfigDialog extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: isDark
                   ? Colors.white.withAlpha(8)
@@ -61,7 +68,8 @@ class ScanConfigDialog extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(Icons.folder_open, size: 16,
+                Icon(Icons.folder_open,
+                    size: 16,
                     color: isDark ? Colors.white70 : theme.primaryColor),
                 const SizedBox(width: 8),
                 Expanded(
@@ -89,16 +97,18 @@ class ScanConfigDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(
-              context, ScanConfigResult(confirmed: false)),
+          onPressed: () =>
+              Navigator.pop(context, ScanConfigResult(confirmed: false)),
           child: const Text('取消'),
         ),
         ElevatedButton(
-          onPressed: () => Navigator.pop(
-              context, ScanConfigResult(confirmed: true)),
+          onPressed: () =>
+              Navigator.pop(context, ScanConfigResult(confirmed: true)),
           child: const Text('开始扫描'),
         ),
       ],
+      ),
+    ),
     );
   }
 }
